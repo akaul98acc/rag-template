@@ -1,0 +1,24 @@
+import psycopg
+import os
+
+_conn = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
+
+
+def upsert(ids: list[str], vectors: list[list[float]], metadatas: list[dict]) -> None:
+    with _conn.cursor() as cur:
+        for i, v, m in zip(ids, vectors, metadatas):
+            cur.execute(
+                "INSERT INTO rag_chunks (id, embedding, metadata) VALUES (%s, %s, %s) "
+                "ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding, metadata = EXCLUDED.metadata",
+                (i, v, m),
+            )
+
+
+def search(query_vector: list[float], top_k: int = 5) -> list[dict]:
+    with _conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, metadata, embedding <=> %s::vector AS distance "
+            "FROM rag_chunks ORDER BY distance LIMIT %s",
+            (query_vector, top_k),
+        )
+        return [{"id": r[0], "metadata": r[1], "distance": float(r[2])} for r in cur.fetchall()]

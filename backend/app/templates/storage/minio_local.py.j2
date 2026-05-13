@@ -1,0 +1,13 @@
+from minio import Minio
+
+
+_client = Minio("localhost:9000", access_key="minioadmin", secret_key="minioadmin", secure=False)
+
+
+def upload_document(bucket: str, object_name: str, data: bytes) -> str:
+    import io
+
+    if not _client.bucket_exists(bucket):
+        _client.make_bucket(bucket)
+    _client.put_object(bucket, object_name, io.BytesIO(data), length=len(data))
+    return f"minio://{bucket}/{object_name}"

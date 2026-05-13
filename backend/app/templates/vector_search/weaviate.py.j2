@@ -1,0 +1,19 @@
+import weaviate
+import os
+
+_client = weaviate.connect_to_wcs(
+    cluster_url=os.environ["WEAVIATE_URL"],
+    auth_credentials=weaviate.auth.AuthApiKey(os.environ["WEAVIATE_API_KEY"]),
+)
+_collection = _client.collections.get("RagChunk")
+
+
+def upsert(ids: list[str], vectors: list[list[float]], metadatas: list[dict]) -> None:
+    with _collection.batch.dynamic() as batch:
+        for i, v, m in zip(ids, vectors, metadatas):
+            batch.add_object(properties=m, uuid=i, vector=v)
+
+
+def search(query_vector: list[float], top_k: int = 5) -> list[dict]:
+    res = _collection.query.near_vector(near_vector=query_vector, limit=top_k)
+    return [{"id": str(o.uuid), "metadata": o.properties} for o in res.objects]

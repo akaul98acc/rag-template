@@ -1,0 +1,9 @@
+import cohere
+import os
+
+_client = cohere.Client(os.environ["COHERE_API_KEY"])
+
+
+def embed(texts: list[str], model: str = "embed-english-v3.0") -> list[list[float]]:
+    resp = _client.embed(texts=texts, model=model, input_type="search_document")
+    return resp.embeddings

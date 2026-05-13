@@ -1,0 +1,13 @@
+from openai import AzureOpenAI
+import os
+
+_client = AzureOpenAI(
+    api_key=os.environ["AZURE_OPENAI_KEY"],
+    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+    api_version="2024-06-01",
+)
+
+
+def embed(texts: list[str], deployment: str = "text-embedding-3-large") -> list[list[float]]:
+    resp = _client.embeddings.create(model=deployment, input=texts)
+    return [d.embedding for d in resp.data]

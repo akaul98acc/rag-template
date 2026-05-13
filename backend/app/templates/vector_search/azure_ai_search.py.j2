@@ -1,0 +1,21 @@
+from azure.search.documents import SearchClient
+from azure.core.credentials import AzureKeyCredential
+import os
+
+_client = SearchClient(
+    endpoint=os.environ["AZURE_AI_SEARCH_ENDPOINT"],
+    index_name="rag-index",
+    credential=AzureKeyCredential(os.environ["AZURE_AI_SEARCH_KEY"]),
+)
+
+
+def upsert(docs: list[dict]) -> None:
+    _client.upload_documents(documents=docs)
+
+
+def search(query_vector: list[float], top_k: int = 5) -> list[dict]:
+    from azure.search.documents.models import VectorizedQuery
+
+    vq = VectorizedQuery(vector=query_vector, k_nearest_neighbors=top_k, fields="embedding")
+    results = _client.search(search_text=None, vector_queries=[vq])
+    return [dict(r) for r in results]

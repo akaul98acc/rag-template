@@ -1,0 +1,10 @@
+from azure.storage.blob import BlobServiceClient
+import os
+
+_client = BlobServiceClient.from_connection_string(os.environ["AZURE_BLOB_CONNECTION_STRING"])
+
+
+def upload_document(container: str, blob_name: str, data: bytes) -> str:
+    container_client = _client.get_container_client(container)
+    container_client.upload_blob(name=blob_name, data=data, overwrite=True)
+    return f"{container}/{blob_name}"

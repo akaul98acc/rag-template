@@ -1,0 +1,6 @@
+from unstructured.partition.auto import partition
+
+
+def extract_text(path: str) -> str:
+    elements = partition(filename=path)
+    return "\n".join(str(el) for el in elements)

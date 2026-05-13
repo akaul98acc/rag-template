@@ -1,0 +1,9 @@
+import boto3
+import os
+
+_textract = boto3.client("textract", region_name=os.environ["AWS_REGION"])
+
+
+def extract_text(file_bytes: bytes) -> str:
+    resp = _textract.detect_document_text(Document={"Bytes": file_bytes})
+    return "\n".join(b["Text"] for b in resp["Blocks"] if b["BlockType"] == "LINE")

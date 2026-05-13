@@ -1,0 +1,14 @@
+from azure.ai.documentintelligence import DocumentIntelligenceClient
+from azure.core.credentials import AzureKeyCredential
+import os
+
+_client = DocumentIntelligenceClient(
+    endpoint=os.environ["AZURE_DOCINTEL_ENDPOINT"],
+    credential=AzureKeyCredential(os.environ["AZURE_DOCINTEL_KEY"]),
+)
+
+
+def extract_text(file_bytes: bytes) -> str:
+    poller = _client.begin_analyze_document("prebuilt-layout", file_bytes)
+    result = poller.result()
+    return "\n".join(p.content for p in result.paragraphs or [])

@@ -1,0 +1,9 @@
+from openai import OpenAI
+import os
+
+_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+
+def embed(texts: list[str], model: str = "text-embedding-3-large") -> list[list[float]]:
+    resp = _client.embeddings.create(model=model, input=texts)
+    return [d.embedding for d in resp.data]
