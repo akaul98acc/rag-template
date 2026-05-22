@@ -2,7 +2,7 @@
 
 A two-phase tool for designing RAG (Retrieval-Augmented Generation) pipelines.
 
-- **Phase 1 — Strategy Agent:** user uploads a document; the agent inspects size + metadata and recommends a chunking strategy, embedding model, and search method.
+- **Phase 1 — Strategy Agent:** user uploads a document; the agent inspects size + metadata and recommends a chunking strategy, embedding model, and search method. The user can tweak the recommendation, then generate Azure-specific Python code wired to those parameters.
 - **Phase 2 — Provider Comparator + Code Generator:** user picks a provider for each pipeline stage (storage, document extraction, embedding, vector search). The app shows trade-offs and, on "Generate code", emits a runnable Python code block wired to those choices.
 
 ## Stack
@@ -10,13 +10,14 @@ A two-phase tool for designing RAG (Retrieval-Augmented Generation) pipelines.
 - **Frontend:** React (Vite, JavaScript). Lives in `frontend/`.
 - **Backend:** FastAPI (Python 3.11+). Lives in `backend/`.
 - **Agent (Phase 1):** Hybrid — deterministic rules first, LLM fallback for ambiguous cases. See `backend/app/services/strategy_agent.py`.
-- **Code generation (Phase 2):** Jinja2 templates per provider per stage. See `backend/app/templates/`.
+- **Code generation (Phase 1 + Phase 2):** Jinja2 templates per provider per stage. See `backend/app/templates/`.
 
 ## Repo layout
 
 ```
 Rag/
 ├── CLAUDE.md
+├── AGENT.md
 ├── .gitignore
 ├── backend/
 │   ├── app/
@@ -25,13 +26,13 @@ Rag/
 │   │   │   ├── upload.py               # POST /upload
 │   │   │   ├── analyze.py              # POST /analyze   (Phase 1)
 │   │   │   ├── providers.py            # GET  /providers (Phase 2 catalog)
-│   │   │   └── generate.py             # POST /generate  (Phase 2 codegen)
+│   │   │   └── generate.py             # POST /generate  (Phase 1 + Phase 2 codegen)
 │   │   ├── core/config.py              # settings via pydantic-settings
 │   │   ├── models/                     # Pydantic request/response schemas
 │   │   ├── services/
 │   │   │   ├── document_analyzer.py    # extracts size, page count, mime, language
 │   │   │   ├── strategy_agent.py       # Phase 1 hybrid decision logic
-│   │   │   └── code_generator.py       # Phase 2 Jinja2 rendering
+│   │   │   └── code_generator.py       # Jinja2 rendering (Phase 1 + Phase 2)
 │   │   ├── providers/                  # provider catalog (metadata + adapter stubs)
 │   │   │   ├── storage/                # azure_blob, aws_s3, gcs, minio
 │   │   │   ├── document_extraction/    # azure_di, aws_textract, google_doc_ai, unstructured
@@ -49,11 +50,11 @@ Rag/
         ├── main.jsx
         ├── App.jsx
         ├── pages/
-        │   ├── Phase1.jsx              # upload + strategy view
+        │   ├── Phase1.jsx              # upload + strategy + azure code gen view
         │   └── Phase2.jsx              # provider selection + code preview
         ├── components/
         │   ├── DocumentUpload.jsx
-        │   ├── StrategyRecommendation.jsx
+        │   ├── StrategyRecommendation.jsx  # includes tweak fields + Generate Code button
         │   ├── ProviderSelector.jsx
         │   └── CodeViewer.jsx
         └── services/api.js             # axios client for backend
@@ -61,12 +62,12 @@ Rag/
 
 ## API contract (current)
 
-| Method | Path          | Purpose                                                                  |
-|--------|---------------|--------------------------------------------------------------------------|
-| POST   | `/upload`     | Multipart upload. Returns `{ doc_id, metadata }`.                        |
-| POST   | `/analyze`    | Body `{ doc_id }`. Returns Phase 1 recommendation (chunking + models).   |
-| GET    | `/providers`  | Returns the catalog: stages × providers with display metadata.           |
-| POST   | `/generate`   | Body `{ selections: { stage: provider_id } }`. Returns rendered code.    |
+| Method | Path          | Purpose                                                                                          |
+|--------|---------------|--------------------------------------------------------------------------------------------------|
+| POST   | `/upload`     | Multipart upload. Returns `{ doc_id, metadata }`.                                                |
+| POST   | `/analyze`    | Body `{ doc_id }`. Returns Phase 1 recommendation (chunking + models).                           |
+| GET    | `/providers`  | Returns the catalog: stages × providers with display metadata.                                   |
+| POST   | `/generate`   | Body `{ selections: { stage: provider_id }, params?: { chunk_size, overlap, embedding_model } }`. Returns rendered code. |
 
 ## Phase 1 — decision logic
 
@@ -79,6 +80,33 @@ The hybrid agent in `strategy_agent.py` runs in two passes:
 2. **LLM fallback** — if the rule pass produces low confidence (mixed content type, unknown language, tabular-heavy), call an LLM with the metadata and let it pick. Confidence threshold + prompt live in the same module.
 
 Add new rules at the top of `strategy_agent.RULES` before falling through to the LLM.
+
+## Phase 1 — code generation (Azure-only)
+
+After the strategy recommendation is shown, the user can adjust parameters before generating code:
+
+- **Editable:** `chunk_size` (number), `overlap` (number), `embedding_model` (select). Pre-filled from recommendation.
+- **Locked (read-only display):** providers are always Azure — no user choice here.
+
+On "Generate Code", the frontend calls `POST /generate` with selections hard-coded to:
+
+```json
+{
+  "selections": {
+    "storage": "azure_blob",
+    "document_extraction": "azure_di",
+    "embedding": "azure_openai",
+    "vector_search": "azure_ai_search"
+  },
+  "params": {
+    "chunk_size": <user_value>,
+    "overlap": <user_value>,
+    "embedding_model": <user_value>
+  }
+}
+```
+
+The same `POST /generate` endpoint serves both Phase 1 and Phase 2 — no separate route needed.
 
 ## Phase 2 — provider catalog
 
@@ -118,6 +146,6 @@ npm run dev    # serves on http://localhost:5173, proxies /api to :8000
 
 ## Out of scope (for now)
 
-- Actually running the generated pipelines end-to-end — Phase 2 emits code, it does not execute it.
+- Actually running the generated pipelines end-to-end — both phases emit code, they do not execute it.
 - Auth / multi-tenant — single-user local tool.
 - Persisting uploads beyond the process lifetime — in-memory document store is fine for Phase 1.

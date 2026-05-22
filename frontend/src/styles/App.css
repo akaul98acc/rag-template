@@ -69,6 +69,10 @@ body {
 }
 .primary:disabled { background: #999; cursor: not-allowed; }
 
+.primary.generate-btn { background: #16a34a; }
+.primary.generate-btn:hover:not(:disabled) { background: #15803d; }
+.primary.generate-btn:disabled { background: #9ca3af; }
+
 .code-block {
   background: #0e1116;
   color: #e6e6e6;
@@ -81,3 +85,57 @@ body {
 .env-hint { font-size: 0.9rem; color: #555; }
 .rationale { color: #444; font-style: italic; }
 .error { color: #c0392b; }
+
+/* ── Button component ──────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  font-family: inherit;
+  font-weight: 500;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+/* sizes */
+.btn--sm  { padding: 0.3rem 0.75rem; font-size: 0.8rem; }
+.btn--md  { padding: 0.5rem 1.1rem;  font-size: 0.9rem; }
+.btn--lg  { padding: 0.7rem 1.5rem;  font-size: 1rem;   }
+
+/* primary — matches existing brand blue */
+.btn--primary {
+  background: #2c5cff;
+  color: #fff;
+  border-color: #2c5cff;
+}
+.btn--primary:hover:not(:disabled)       { background: #1e4ae0; border-color: #1e4ae0; }
+.btn--primary:focus-visible              { outline: none; box-shadow: 0 0 0 3px rgba(44, 92, 255, 0.3); }
+
+/* secondary — outlined, no fill */
+.btn--secondary {
+  background: #fff;
+  color: #1d1f23;
+  border-color: #d0d4dc;
+}
+.btn--secondary:hover:not(:disabled)     { background: #f0f2f5; border-color: #b0b6c2; }
+.btn--secondary:focus-visible            { outline: none; box-shadow: 0 0 0 3px rgba(44, 92, 255, 0.2); }
+
+/* danger */
+.btn--danger {
+  background: #dc2626;
+  color: #fff;
+  border-color: #dc2626;
+}
+.btn--danger:hover:not(:disabled)        { background: #b91c1c; border-color: #b91c1c; }
+.btn--danger:focus-visible               { outline: none; box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.3); }
+
+/* shared disabled state */
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

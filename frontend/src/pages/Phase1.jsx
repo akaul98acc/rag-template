@@ -1,6 +1,7 @@
 import { useState } from "react";
 import DocumentUpload from "../components/DocumentUpload.jsx";
 import StrategyRecommendation from "../components/StrategyRecommendation.jsx";
+import Button from "../components/Button.jsx";
 import { analyzeDocument } from "../services/api.js";
 
 export default function Phase1() {
@@ -20,6 +21,11 @@ export default function Phase1() {
     }
   }
 
+  function handleReset() {
+    setUpload(null);
+    setRecommendation(null);
+  }
+
   return (
     <section>
       <h2>Phase 1 · Strategy Agent</h2>
@@ -33,6 +39,11 @@ export default function Phase1() {
       )}
       {loading && <p>Analyzing…</p>}
       {recommendation && <StrategyRecommendation recommendation={recommendation} />}
+      {upload && (
+        <Button variant="secondary" size="sm" onClick={handleReset} disabled={loading}>
+          Reset
+        </Button>
+      )}
     </section>
   );
 }

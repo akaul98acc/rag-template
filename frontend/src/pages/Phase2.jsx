@@ -1,6 +1,8 @@
+
 import { useEffect, useState } from "react";
 import ProviderSelector from "../components/ProviderSelector.jsx";
 import CodeViewer from "../components/CodeViewer.jsx";
+import Button from "../components/Button.jsx";
 import { fetchProviders, generateCode } from "../services/api.js";
 
 const STAGES = ["storage", "document_extraction", "embedding", "vector_search"];
@@ -37,9 +39,13 @@ export default function Phase2() {
           onSelect={(pid) => select(stage, pid)}
         />
       ))}
-      <button className="primary" onClick={handleGenerate} disabled={Object.keys(selections).length === 0}>
-        Generate code
-      </button>
+      <Button
+        className="generate-btn"
+        onClick={handleGenerate}
+        disabled={Object.keys(selections).length === 0}
+      >
+        Generate Code
+      </Button>
       {generated && <CodeViewer code={generated.code} requiresEnv={generated.requires_env} />}
     </section>
   );
