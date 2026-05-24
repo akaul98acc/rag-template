@@ -1,6 +1,7 @@
 import { Link, Route, Routes, Navigate } from "react-router-dom";
 import Phase1 from "./pages/Phase1.jsx";
 import Phase2 from "./pages/Phase2.jsx";
+import ThemeToggle from "./components/ThemeToggle.jsx";
 
 export default function App() {
   return (
@@ -11,6 +12,7 @@ export default function App() {
           <Link to="/phase1">Phase 1 · Strategy</Link>
           <Link to="/phase2">Phase 2 · Compare & Generate</Link>
         </nav>
+        <ThemeToggle />
       </header>
       <main className="app-main">
         <Routes>
