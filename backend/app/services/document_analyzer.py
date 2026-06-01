@@ -81,7 +81,8 @@ async def analyze_file(
             has_tables = tables > 0
 
             logger.info(
-                "Azure DI extraction successful: pages=%d, language=%s, tables=%d, images=%d",
+                "[DI] Azure Document Intelligence USED for %s: pages=%d, language=%s, tables=%d, images=%d",
+                original_name,
                 page_count,
                 language,
                 tables,
@@ -93,11 +94,15 @@ async def analyze_file(
         except AzureDIError as e:
             # Log and fall back to local analysis for other Azure DI errors
             logger.warning("Azure DI extraction failed, falling back to local analysis: %s", e)
-        except RuntimeError as e:
-            # SDK not installed or not configured properly
-            logger.warning("Azure DI unavailable: %s", e)
+        except (RuntimeError, ImportError) as e:
+            # SDK / async transport (e.g. aiohttp) not installed, or not configured properly
+            logger.warning("[DI] Azure DI unavailable, falling back to local analysis: %s", e)
     else:
-        logger.info("Azure DI not configured, using local-only analysis")
+        logger.warning(
+            "[DI] Azure DI NOT configured - using local pypdf fallback for %s "
+            "(page_count from pypdf, language/tables/images unavailable)",
+            original_name,
+        )
 
     return DocumentMetadata(
         filename=original_name,

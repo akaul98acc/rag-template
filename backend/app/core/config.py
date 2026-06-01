@@ -1,4 +1,10 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Anchor .env to backend/ (two levels up from this file: app/core/config.py),
+# so settings load regardless of the current working directory.
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 # Supported MIME types for document upload
@@ -15,7 +21,7 @@ SUPPORTED_MIME_TYPES: frozenset[str] = frozenset(
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
 
     cors_origins: list[str] = ["http://localhost:5173"]
     upload_dir: str = "uploads"
@@ -28,6 +34,9 @@ class Settings(BaseSettings):
 
     # Azure Document Intelligence settings
     azure_docint_endpoint: str | None = None
+    # Optional API key. When set, the DI client uses key auth (AzureKeyCredential)
+    # instead of DefaultAzureCredential (Managed Identity / az login).
+    azure_docint_key: str | None = None
 
     # Upload constraints
     max_upload_size_mb: int = 50

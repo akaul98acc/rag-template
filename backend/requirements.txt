@@ -12,3 +12,5 @@ httpx>=0.27
 # Azure Document Intelligence (optional - app loads without these)
 azure-ai-documentintelligence>=1.0.0
 azure-identity>=1.15.0
+# Required async HTTP transport for the .aio Document Intelligence client
+aiohttp>=3.9
