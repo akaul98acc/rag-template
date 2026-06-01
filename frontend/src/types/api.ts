@@ -5,10 +5,15 @@ export type StageId =
   | "vector_search";
 
 export interface DocumentMetadata {
+  filename?: string;
   size_bytes?: number;
   page_count?: number;
   mime_type?: string;
   language?: string;
+  has_tables?: boolean;
+  is_scanned?: boolean;
+  tables?: number;
+  images?: number;
   [key: string]: unknown;
 }
 

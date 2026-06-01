@@ -42,6 +42,16 @@ const config: Config = {
       fontFamily: {
         sans: ["system-ui", "-apple-system", '"Segoe UI"', "sans-serif"],
       },
+      keyframes: {
+        "progress-indeterminate": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(400%)" },
+        },
+      },
+      animation: {
+        "progress-indeterminate":
+          "progress-indeterminate 1.5s ease-in-out infinite",
+      },
     },
   },
   plugins: [],

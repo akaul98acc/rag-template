@@ -2,6 +2,7 @@ import { Link, Route, Routes, Navigate } from "react-router-dom";
 import Phase1 from "./pages/Phase1";
 import Phase2 from "./pages/Phase2";
 import ThemeToggle from "./components/ThemeToggle";
+import { Toaster } from "./components/ui/toaster";
 
 export default function App() {
   return (
@@ -33,6 +34,7 @@ export default function App() {
           <Route path="/phase2" element={<Phase2 />} />
         </Routes>
       </main>
+      <Toaster />
     </div>
   );
 }

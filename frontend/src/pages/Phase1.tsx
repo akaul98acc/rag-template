@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import DocumentMetadataCard from "@/components/DocumentMetadataCard";
 import DocumentUpload from "@/components/DocumentUpload";
 import StrategyRecommendation from "@/components/StrategyRecommendation";
 import { Button } from "@/components/ui/button";
@@ -50,14 +51,7 @@ export default function Phase1() {
       {!upload && !loading && !error && (
         <p className="text-fg-muted">Upload a document to begin.</p>
       )}
-      {upload && (
-        <div className="bg-surface border border-border rounded-lg p-5 mb-5">
-          <h3 className="mt-0 mb-3 text-lg font-semibold">Document metadata</h3>
-          <pre className="font-mono text-sm whitespace-pre-wrap m-0">
-            {JSON.stringify(upload.metadata, null, 2)}
-          </pre>
-        </div>
-      )}
+      {upload && <DocumentMetadataCard metadata={upload.metadata} />}
       {loading && <p className="text-fg-muted">Analyzing…</p>}
       {error && (
         <p

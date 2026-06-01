@@ -77,6 +77,7 @@ async def extract_metadata(file_bytes: bytes, content_type: str | None) -> Azure
     try:
         from azure.ai.documentintelligence.aio import DocumentIntelligenceClient
         from azure.ai.documentintelligence.models import DocumentAnalysisFeature
+        from azure.core.credentials import AzureKeyCredential
         from azure.core.exceptions import HttpResponseError, ServiceRequestError
         from azure.identity.aio import DefaultAzureCredential
     except ImportError as e:
@@ -86,7 +87,15 @@ async def extract_metadata(file_bytes: bytes, content_type: str | None) -> Azure
 
     endpoint = settings.azure_docint_endpoint
 
-    async with DefaultAzureCredential() as credential:
+    # When a key is configured, use key auth (AzureKeyCredential); otherwise fall
+    # back to DefaultAzureCredential (Managed Identity / az login). AzureKeyCredential
+    # is not an async context manager, so only DefaultAzureCredential needs closing.
+    if settings.azure_docint_key:
+        credential = AzureKeyCredential(settings.azure_docint_key)
+    else:
+        credential = DefaultAzureCredential()
+
+    try:
         async with DocumentIntelligenceClient(endpoint, credential) as client:
             try:
                 poller = await client.begin_analyze_document(
@@ -124,6 +133,12 @@ async def extract_metadata(file_bytes: bytes, content_type: str | None) -> Azure
                 raise AzureDIError(
                     f"Could not reach Document Intelligence endpoint: {exc}", status_code=None
                 ) from exc
+    finally:
+        # DefaultAzureCredential holds network sessions that must be closed;
+        # AzureKeyCredential has no close() and needs no cleanup.
+        close = getattr(credential, "close", None)
+        if callable(close):
+            await credential.close()
 
     # Extract metadata from result
     page_count = len(result.pages or [])
