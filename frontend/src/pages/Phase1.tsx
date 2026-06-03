@@ -1,80 +1,401 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
-import DocumentMetadataCard from "@/components/DocumentMetadataCard";
-import DocumentUpload from "@/components/DocumentUpload";
-import StrategyRecommendation from "@/components/StrategyRecommendation";
+import DocumentUploadSection from "@/components/DocumentUploadSection";
+import { OptionCardGrid, type OptionItem } from "@/components/OptionCard";
+import { ParameterSliders } from "@/components/ParameterSlider";
+import { StatCards } from "@/components/StatCard";
+import CodeViewer from "@/components/CodeViewer";
 import { Button } from "@/components/ui/button";
-import { analyzeDocument } from "@/services/api";
-import type { Recommendation, UploadResult } from "@/types/api";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { analyzeDocument, generateCode } from "@/services/api";
+import { toast } from "@/hooks/use-toast";
+import type { Recommendation, UploadResult, GenerateResult } from "@/types/api";
+import {
+  DOCUMENT_SIZE_OPTIONS,
+  DOCUMENT_TYPE_OPTIONS,
+  EMBEDDING_MODEL_OPTIONS,
+  LLM_MODEL_OPTIONS,
+  CHUNKING_STRATEGY_OPTIONS,
+  PARAMETER_CONFIGS,
+  getEmbeddingDimensions,
+  getEmbeddingCost,
+} from "@/config/configuratorOptions";
+
+type TabValue = "configure" | "decisions" | "code" | "features";
+
+interface ConfigState {
+  documentSize: string;
+  documentType: string;
+  embeddingModel: string;
+  llmModel: string;
+  chunkingStrategy: string;
+  parameters: Record<string, number>;
+}
+
+const DEFAULT_CONFIG: ConfigState = {
+  documentSize: "",
+  documentType: "",
+  embeddingModel: "auto",
+  llmModel: "auto",
+  chunkingStrategy: "auto",
+  parameters: {
+    chunk_size: 512,
+    chunk_overlap: 64,
+    top_k: 5,
+  },
+};
+
+/**
+ * Infer document size from metadata.
+ */
+function inferDocumentSize(pageCount?: number, sizeBytes?: number): string {
+  if (!pageCount && !sizeBytes) return "";
+  const pages = pageCount ?? 0;
+  const sizeMB = (sizeBytes ?? 0) / (1024 * 1024);
+
+  if (pages < 50 && sizeMB < 0.1) return "small";
+  if (pages >= 500 || sizeMB >= 10) return "large";
+  return "medium";
+}
+
+/**
+ * Update embedding model options based on recommendation.
+ */
+function getEmbeddingOptionsWithRecommendation(
+  recommendation: Recommendation | null
+): OptionItem[] {
+  if (!recommendation) return EMBEDDING_MODEL_OPTIONS;
+
+  return EMBEDDING_MODEL_OPTIONS.map((opt) => {
+    // Update auto-select to show what agent picked
+    if (opt.id === "auto") {
+      return {
+        ...opt,
+        description: `Agent picks: ${recommendation.embedding_model}`,
+      };
+    }
+    // Add recommended badge to the model that matches recommendation
+    if (opt.id === recommendation.embedding_model && opt.id !== "auto") {
+      return {
+        ...opt,
+        badge: { label: "recommended", variant: "recommended" as const },
+      };
+    }
+    // Remove badges from other models unless they're cost/perf
+    if (opt.badge?.variant === "recommended") {
+      return { ...opt, badge: undefined };
+    }
+    return opt;
+  });
+}
 
 export default function Phase1() {
+  const [activeTab, setActiveTab] = useState<TabValue>("configure");
   const [upload, setUpload] = useState<UploadResult | null>(null);
   const [recommendation, setRecommendation] = useState<Recommendation | null>(
     null
   );
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [config, setConfig] = useState<ConfigState>(DEFAULT_CONFIG);
+  const [generated, setGenerated] = useState<GenerateResult | null>(null);
+  const [generating, setGenerating] = useState(false);
+
+  // Update options based on recommendation
+  const embeddingOptions = useMemo(
+    () => getEmbeddingOptionsWithRecommendation(recommendation),
+    [recommendation]
+  );
 
   async function handleUploaded(result: UploadResult) {
     setUpload(result);
     setRecommendation(null);
-    setError(null);
-    setLoading(true);
+    setGenerated(null);
+    setAnalyzing(true);
+
+    // Auto-infer document size from metadata
+    const inferredSize = inferDocumentSize(
+      result.metadata.page_count,
+      result.metadata.size_bytes
+    );
+    setConfig((prev) => ({
+      ...prev,
+      documentSize: inferredSize || prev.documentSize,
+    }));
+
     try {
       const rec = await analyzeDocument(result.doc_id);
       setRecommendation(rec);
+
+      // Update parameters based on recommendation
+      setConfig((prev) => ({
+        ...prev,
+        parameters: {
+          ...prev.parameters,
+          chunk_size: rec.chunk_size_tokens,
+          chunk_overlap: rec.chunk_overlap_tokens,
+        },
+      }));
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Analysis failed";
-      setError(message);
+      toast({
+        variant: "destructive",
+        title: "Analysis failed",
+        description: message,
+      });
     } finally {
-      setLoading(false);
+      setAnalyzing(false);
+    }
+  }
+
+  function updateConfig<K extends keyof ConfigState>(
+    key: K,
+    value: ConfigState[K]
+  ) {
+    setConfig((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function updateParameter(id: string, value: number) {
+    setConfig((prev) => ({
+      ...prev,
+      parameters: { ...prev.parameters, [id]: value },
+    }));
+  }
+
+  async function handleGenerate() {
+    setGenerating(true);
+    try {
+      // Phase 1 uses Azure-locked selections
+      const result = await generateCode({
+        storage: "azure_blob",
+        document_extraction: "azure_di",
+        embedding: "azure_openai",
+        vector_search: "azure_ai_search",
+      });
+      setGenerated(result);
+      setActiveTab("code");
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Code generation failed";
+      toast({
+        variant: "destructive",
+        title: "Generation failed",
+        description: message,
+      });
+    } finally {
+      setGenerating(false);
     }
   }
 
   function handleReset() {
     setUpload(null);
     setRecommendation(null);
-    setError(null);
+    setGenerated(null);
+    setConfig(DEFAULT_CONFIG);
+    setActiveTab("configure");
   }
+
+  // Calculate stats for display
+  const selectedEmbedding =
+    config.embeddingModel === "auto" && recommendation
+      ? recommendation.embedding_model
+      : config.embeddingModel;
+  const vectorDims = getEmbeddingDimensions(selectedEmbedding);
+  const embedCost = getEmbeddingCost(selectedEmbedding);
+
+  const stats = [
+    { value: config.parameters.chunk_size ?? 512, label: "Chunk tokens" },
+    { value: vectorDims ?? 3072, label: "Vector dims", highlight: true },
+    { value: `${embedCost}/1K`, label: "Embed cost" },
+    { value: "~$0.01/query", label: "Query cost" },
+  ];
 
   return (
     <section>
-      <h2 className="text-2xl font-semibold mt-0 mb-2">
-        Phase 1 · Strategy Agent
-      </h2>
-      <p className="text-fg-muted mb-5">
-        Upload a document. The agent will recommend chunking, embedding, and
-        search settings.
-      </p>
-      <DocumentUpload onUploaded={handleUploaded} />
-      {!upload && !loading && !error && (
-        <p className="text-fg-muted">Upload a document to begin.</p>
-      )}
-      {upload && <DocumentMetadataCard metadata={upload.metadata} />}
-      {loading && <p className="text-fg-muted">Analyzing…</p>}
-      {error && (
-        <p
-          role="alert"
-          className="bg-surface border border-danger text-error-text rounded-lg p-3 mb-5"
-        >
-          {error}
-        </p>
-      )}
-      {recommendation && (
-        <StrategyRecommendation recommendation={recommendation} />
-      )}
-      {upload && (
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={handleReset}
-          disabled={loading}
-          aria-label="Reset Phase 1 session"
-        >
-          Reset
-        </Button>
-      )}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-semibold mt-0 mb-1">
+            Phase 1: Strategy Agent
+          </h2>
+          <p className="text-fg-muted text-sm m-0">
+            Upload a document and configure your RAG pipeline strategy.
+          </p>
+        </div>
+        {upload && (
+          <Button variant="secondary" size="sm" onClick={handleReset}>
+            Reset
+          </Button>
+        )}
+      </div>
+
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as TabValue)}
+      >
+        <TabsList className="mb-6">
+          <TabsTrigger value="configure">Configure</TabsTrigger>
+          <TabsTrigger value="decisions" disabled={!recommendation}>
+            Agent Decisions
+          </TabsTrigger>
+          <TabsTrigger value="code" disabled={!generated}>
+            Generated Code
+          </TabsTrigger>
+          <TabsTrigger value="features" disabled>
+            Features
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="configure">
+          <DocumentUploadSection
+            onUploaded={handleUploaded}
+            uploadResult={upload}
+          />
+
+          {analyzing && (
+            <div className="bg-surface border border-border rounded-lg p-6 mb-6 text-center">
+              <p className="text-fg-muted">Analyzing document...</p>
+            </div>
+          )}
+
+          {(upload || !analyzing) && (
+            <>
+              <OptionCardGrid
+                heading="Document Size"
+                options={DOCUMENT_SIZE_OPTIONS.map((opt) => ({
+                  ...opt,
+                  badge:
+                    config.documentSize === opt.id && upload
+                      ? { label: "detected", variant: "recommended" as const }
+                      : opt.badge,
+                }))}
+                selected={config.documentSize}
+                onSelect={(id) => updateConfig("documentSize", id)}
+                columns={3}
+              />
+
+              <OptionCardGrid
+                heading="Document Type"
+                options={DOCUMENT_TYPE_OPTIONS}
+                selected={config.documentType}
+                onSelect={(id) => updateConfig("documentType", id)}
+                columns={2}
+              />
+
+              <OptionCardGrid
+                heading="Embedding Model"
+                options={embeddingOptions}
+                selected={config.embeddingModel}
+                onSelect={(id) => updateConfig("embeddingModel", id)}
+                columns={4}
+              />
+
+              <OptionCardGrid
+                heading="LLM Model"
+                options={LLM_MODEL_OPTIONS}
+                selected={config.llmModel}
+                onSelect={(id) => updateConfig("llmModel", id)}
+                columns={4}
+              />
+
+              <OptionCardGrid
+                heading="Chunking Strategy"
+                options={CHUNKING_STRATEGY_OPTIONS}
+                selected={config.chunkingStrategy}
+                onSelect={(id) => updateConfig("chunkingStrategy", id)}
+                columns={3}
+              />
+
+              <ParameterSliders
+                parameters={PARAMETER_CONFIGS}
+                values={config.parameters}
+                onChange={updateParameter}
+              />
+
+              <StatCards stats={stats} className="mb-6" />
+
+              {/* Azure Provider Badges (read-only) */}
+              <div className="mb-6">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-fg-muted mb-3">
+                  Pipeline Providers (Azure-locked)
+                </h4>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="muted">Storage: Azure Blob Storage</Badge>
+                  <Badge variant="muted">
+                    Extraction: Azure Document Intelligence
+                  </Badge>
+                  <Badge variant="muted">Embedding: Azure OpenAI</Badge>
+                  <Badge variant="muted">
+                    Vector Search: Azure AI Search
+                  </Badge>
+                </div>
+              </div>
+
+              <Button
+                variant="success"
+                onClick={handleGenerate}
+                disabled={generating || !upload}
+                aria-label="Generate pipeline code"
+              >
+                {generating ? "Generating..." : "Generate Code"}
+              </Button>
+            </>
+          )}
+        </TabsContent>
+
+        <TabsContent value="decisions">
+          {recommendation && (
+            <div className="bg-surface border border-border rounded-lg p-6">
+              <h3 className="mt-0 mb-4 text-lg font-semibold">
+                Agent Recommendations
+              </h3>
+              <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-3 text-sm">
+                <dt className="text-fg-muted">Chunk size</dt>
+                <dd className="text-fg font-medium">
+                  {recommendation.chunk_size_tokens} tokens
+                </dd>
+                <dt className="text-fg-muted">Chunk overlap</dt>
+                <dd className="text-fg font-medium">
+                  {recommendation.chunk_overlap_tokens} tokens
+                </dd>
+                <dt className="text-fg-muted">Embedding model</dt>
+                <dd className="text-fg font-medium">
+                  {recommendation.embedding_model}
+                </dd>
+                <dt className="text-fg-muted">Search method</dt>
+                <dd className="text-fg font-medium">
+                  {recommendation.search_method}
+                </dd>
+                <dt className="text-fg-muted">Decision source</dt>
+                <dd className="text-fg font-medium">
+                  {recommendation.source} (
+                  {Math.round(recommendation.confidence * 100)}% confidence)
+                </dd>
+              </dl>
+              <div className="mt-4 p-4 bg-hover-soft rounded-lg">
+                <p className="text-sm text-fg-muted italic m-0">
+                  {recommendation.rationale}
+                </p>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="code">
+          {generated && (
+            <CodeViewer
+              code={generated.code}
+              requiresEnv={generated.requires_env}
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="features">
+          <div className="bg-surface border border-border rounded-lg p-6 text-center text-fg-muted">
+            Feature comparison coming soon.
+          </div>
+        </TabsContent>
+      </Tabs>
     </section>
   );
 }
