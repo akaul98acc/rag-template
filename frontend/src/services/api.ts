@@ -10,12 +10,29 @@ import type {
 
 const client = axios.create({ baseURL: "/api" });
 
-export async function uploadDocument(file: File): Promise<UploadResult> {
+export type UploadProgressCallback = (progress: number) => void;
+
+export async function uploadDocument(
+  file: File,
+  onProgress?: UploadProgressCallback
+): Promise<UploadResult> {
   const form = new FormData();
   form.append("file", file);
   const { data } = await client.post<UploadResult>("/upload", form, {
     headers: { "Content-Type": "multipart/form-data" },
+    onUploadProgress: onProgress
+      ? (progressEvent) => {
+          if (progressEvent.total) {
+            const percent = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+            );
+            onProgress(percent);
+          }
+        }
+      : undefined,
   });
+  // End-to-end integration check: log the raw /api/upload response.
+  console.log("[upload] /api/upload response:", data);
   return data;
 }
 

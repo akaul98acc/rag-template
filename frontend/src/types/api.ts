@@ -5,10 +5,22 @@ export type StageId =
   | "vector_search";
 
 export interface DocumentMetadata {
+  filename?: string;
   size_bytes?: number;
   page_count?: number;
   mime_type?: string;
   language?: string;
+  has_tables?: boolean;
+  is_scanned?: boolean;
+  tables?: number;
+  images?: number;
+  // Derived content statistics (Azure Document Intelligence)
+  avg_words_per_page?: number | null;
+  text_density?: string | null;
+  table_ratio?: number | null;
+  doc_type?: string | null;
+  content_type?: string | null;
+  avg_sentence_length?: number | null;
   [key: string]: unknown;
 }
 
