@@ -29,6 +29,10 @@ Thumbs.db
 
 # Uploaded docs (local dev)
 backend/uploads/
+backend/app/uploads/
+
+# Never commit uploaded/sample documents
+*.pdf
 
 # Claude Code local settings
 .claude/settings.local.json

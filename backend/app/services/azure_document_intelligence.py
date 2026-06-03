@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from app.core.config import settings
 from app.models.document import AzureDIResult
+from app.services.content_stats import count_sentences, count_words
 
 if TYPE_CHECKING:
     pass
@@ -150,9 +151,26 @@ async def extract_metadata(file_bytes: bytes, content_type: str | None) -> Azure
         best = max(result.languages, key=lambda lang: lang.confidence or 0.0)
         detected_language = best.locale
 
+    # Extract text content for derived statistics
+    content_text = result.content or ""
+    total_char_count = len(content_text)
+    word_count = count_words(content_text)
+    sentence_count = count_sentences(content_text)
+
+    # Compute total characters in table cells
+    table_char_count = 0
+    for table in result.tables or []:
+        for cell in table.cells or []:
+            cell_content = cell.content or ""
+            table_char_count += len(cell_content)
+
     return AzureDIResult(
         page_count=page_count,
         language=detected_language,
         tables=table_count,
         images=image_count,
+        word_count=word_count,
+        sentence_count=sentence_count,
+        total_char_count=total_char_count,
+        table_char_count=table_char_count,
     )

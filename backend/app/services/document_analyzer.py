@@ -11,6 +11,11 @@ from app.services.azure_document_intelligence import (
     extract_metadata as azure_di_extract,
     is_azure_di_configured,
 )
+from app.services.content_stats import (
+    count_sentences,
+    count_words,
+    derive_content_stats,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,13 @@ async def analyze_file(
     images = 0
     has_tables = False
 
+    # Raw signals for derived stats (populated by Azure DI or local fallback)
+    word_count = 0
+    sentence_count = 0
+    total_char_count = 0
+    table_char_count = 0
+    used_azure_di = False
+
     # Try Azure Document Intelligence if configured
     if is_azure_di_configured():
         try:
@@ -79,6 +91,13 @@ async def analyze_file(
             tables = azure_result.tables
             images = azure_result.images
             has_tables = tables > 0
+
+            # Extract raw signals for derived stats
+            word_count = azure_result.word_count
+            sentence_count = azure_result.sentence_count
+            total_char_count = azure_result.total_char_count
+            table_char_count = azure_result.table_char_count
+            used_azure_di = True
 
             logger.info(
                 "[DI] Azure Document Intelligence USED for %s: pages=%d, language=%s, tables=%d, images=%d",
@@ -104,6 +123,25 @@ async def analyze_file(
             original_name,
         )
 
+    # Local fallback for text extraction if Azure DI was not used
+    if not used_azure_di and mime == "application/pdf":
+        extracted_text = _extract_pdf_text(path)
+        if extracted_text:
+            word_count = count_words(extracted_text)
+            sentence_count = count_sentences(extracted_text)
+            total_char_count = len(extracted_text)
+            # table_char_count stays 0 - pypdf cannot detect tables
+
+    # Compute derived content statistics
+    content_stats = derive_content_stats(
+        word_count=word_count,
+        page_count=page_count,
+        sentence_count=sentence_count,
+        table_char_count=table_char_count,
+        total_char_count=total_char_count,
+        filename=original_name,
+    )
+
     return DocumentMetadata(
         filename=original_name,
         size_bytes=size,
@@ -114,6 +152,12 @@ async def analyze_file(
         is_scanned=is_scanned,
         tables=tables,
         images=images,
+        avg_words_per_page=content_stats["avg_words_per_page"],
+        text_density=content_stats["text_density"],
+        table_ratio=content_stats["table_ratio"],
+        doc_type=content_stats["doc_type"],
+        content_type=content_stats["content_type"],
+        avg_sentence_length=content_stats["avg_sentence_length"],
     )
 
 
@@ -137,3 +181,22 @@ def _is_scanned_pdf(path: Path) -> bool:
         return True
     except Exception:
         return False
+
+
+def _extract_pdf_text(path: Path) -> str:
+    """Extract all text content from a PDF using pypdf.
+
+    Returns empty string if extraction fails or no text found.
+    """
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(path))
+        text_parts: list[str] = []
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            if page_text.strip():
+                text_parts.append(page_text)
+        return " ".join(text_parts)
+    except Exception:
+        return ""

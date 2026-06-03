@@ -14,6 +14,13 @@ export interface DocumentMetadata {
   is_scanned?: boolean;
   tables?: number;
   images?: number;
+  // Derived content statistics (Azure Document Intelligence)
+  avg_words_per_page?: number | null;
+  text_density?: string | null;
+  table_ratio?: number | null;
+  doc_type?: string | null;
+  content_type?: string | null;
+  avg_sentence_length?: number | null;
   [key: string]: unknown;
 }
 

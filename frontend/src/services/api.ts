@@ -31,6 +31,8 @@ export async function uploadDocument(
         }
       : undefined,
   });
+  // End-to-end integration check: log the raw /api/upload response.
+  console.log("[upload] /api/upload response:", data);
   return data;
 }
 
