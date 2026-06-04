@@ -6,12 +6,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.core.config import settings, SUPPORTED_MIME_TYPES
 from app.models import UploadResponse
-from app.services.azure_document_intelligence import (
-    AzureDIAuthError,
-    AzureDIError,
-    AzureDIThrottledError,
-)
-from app.services.document_analyzer import analyze_file, register_document
+from app.services.document_analyzer import register_document
+from app.services.local_metadata import extract_metadata_local
 
 router = APIRouter()
 
@@ -21,7 +17,7 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
     """Upload a document and extract metadata.
 
     Validates file size, MIME type, and non-empty content before processing.
-    Uses Azure Document Intelligence when configured for enhanced metadata extraction.
+    Uses local libraries (PyMuPDF, pdfplumber, langdetect) for metadata extraction.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="filename missing")
@@ -59,22 +55,8 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
     dest = Path(settings.upload_dir) / f"{doc_id}_{file.filename}"
     dest.write_bytes(content)
 
-    # Analyze document
-    try:
-        metadata = await analyze_file(dest, original_name=file.filename, file_bytes=content)
-    except AzureDIAuthError as e:
-        raise HTTPException(
-            status_code=502, detail="Document Intelligence authentication failed"
-        ) from e
-    except AzureDIThrottledError as e:
-        detail: dict[str, str | int] = {"detail": "Document Intelligence rate limit exceeded"}
-        if e.retry_after is not None:
-            detail["retry_after"] = e.retry_after
-        raise HTTPException(status_code=503, detail=detail) from e  # type: ignore[arg-type]
-    except AzureDIError as e:
-        raise HTTPException(
-            status_code=502, detail=f"Document Intelligence error: {e.message}"
-        ) from e
+    # Extract metadata using local libraries
+    metadata = extract_metadata_local(dest, file.filename, content)
 
     register_document(doc_id, dest, metadata)
     return UploadResponse(doc_id=doc_id, metadata=metadata)
