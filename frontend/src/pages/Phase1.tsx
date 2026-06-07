@@ -64,29 +64,34 @@ function inferDocumentSize(pageCount?: number, sizeBytes?: number): string {
 }
 
 /**
- * Update embedding model options based on recommendation.
+ * Generic helper to update option arrays with recommendation-based badges.
+ * Strips "recommended" badge from the "auto" option and moves it to the
+ * actual recommended option. Keeps cost/perf badges on other options.
  */
-function getEmbeddingOptionsWithRecommendation(
-  recommendation: PipelineRecommendation | null
+function applyRecommendationBadge(
+  options: OptionItem[],
+  recommendedId: string | undefined,
+  autoDescription?: string
 ): OptionItem[] {
-  if (!recommendation) return EMBEDDING_MODEL_OPTIONS;
+  if (!recommendedId) return options;
 
-  return EMBEDDING_MODEL_OPTIONS.map((opt) => {
-    // Update auto-select to show what agent picked
+  return options.map((opt) => {
+    // Update auto-select description and strip its "recommended" badge
     if (opt.id === "auto") {
       return {
         ...opt,
-        description: `Agent picks: ${recommendation.embedding_model}`,
+        description: autoDescription ?? opt.description,
+        badge: undefined,
       };
     }
-    // Add recommended badge to the model that matches recommendation
-    if (opt.id === recommendation.embedding_model && opt.id !== "auto") {
+    // Add recommended badge to the option that matches recommendation
+    if (opt.id === recommendedId) {
       return {
         ...opt,
         badge: { label: "recommended", variant: "recommended" as const },
       };
     }
-    // Remove badges from other models unless they're cost/perf
+    // Remove stale "recommended" badges from other options; keep cost/perf
     if (opt.badge?.variant === "recommended") {
       return { ...opt, badge: undefined };
     }
@@ -106,7 +111,36 @@ export default function Phase1() {
 
   // Update options based on recommendation
   const embeddingOptions = useMemo(
-    () => getEmbeddingOptionsWithRecommendation(recommendation),
+    () =>
+      applyRecommendationBadge(
+        EMBEDDING_MODEL_OPTIONS,
+        recommendation?.embedding_model,
+        recommendation
+          ? `Agent picks: ${recommendation.embedding_model}`
+          : undefined
+      ),
+    [recommendation]
+  );
+
+  const llmOptions = useMemo(
+    () =>
+      applyRecommendationBadge(
+        LLM_MODEL_OPTIONS,
+        recommendation?.llm_model,
+        recommendation ? `Agent picks: ${recommendation.llm_model}` : undefined
+      ),
+    [recommendation]
+  );
+
+  const chunkingOptions = useMemo(
+    () =>
+      applyRecommendationBadge(
+        CHUNKING_STRATEGY_OPTIONS,
+        recommendation?.chunking_strategy,
+        recommendation
+          ? `Agent picks: ${recommendation.chunking_strategy}`
+          : undefined
+      ),
     [recommendation]
   );
 
@@ -303,7 +337,7 @@ export default function Phase1() {
 
               <OptionCardGrid
                 heading="LLM Model"
-                options={LLM_MODEL_OPTIONS}
+                options={llmOptions}
                 selected={config.llmModel}
                 onSelect={(id) => updateConfig("llmModel", id)}
                 columns={4}
@@ -311,7 +345,7 @@ export default function Phase1() {
 
               <OptionCardGrid
                 heading="Chunking Strategy"
-                options={CHUNKING_STRATEGY_OPTIONS}
+                options={chunkingOptions}
                 selected={config.chunkingStrategy}
                 onSelect={(id) => updateConfig("chunkingStrategy", id)}
                 columns={3}
