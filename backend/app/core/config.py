@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # instead of DefaultAzureCredential (Managed Identity / az login).
     azure_docint_key: str | None = None
 
+    # Azure OpenAI settings (used by the /recommend pipeline recommender)
+    azure_openai_endpoint: str | None = None
+    azure_openai_key: str | None = None
+    azure_openai_deployment: str = "gpt-4o-mini"
+    azure_openai_api_version: str = "2024-10-21"
+
     # Upload constraints
     max_upload_size_mb: int = 50
 

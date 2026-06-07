@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import analyze, generate, providers, upload
+from app.api.routes import generate, providers, recommend, upload
 from app.core.config import settings
 from app.services.azure_document_intelligence import is_azure_di_configured
 
@@ -42,7 +42,7 @@ app.add_middleware(
 )
 
 app.include_router(upload.router, prefix="/api", tags=["upload"])
-app.include_router(analyze.router, prefix="/api", tags=["phase1"])
+app.include_router(recommend.router, prefix="/api", tags=["phase1"])
 app.include_router(providers.router, prefix="/api", tags=["phase2"])
 app.include_router(generate.router, prefix="/api", tags=["phase2"])
 

@@ -2,8 +2,8 @@ import axios from "axios";
 
 import type {
   GenerateResult,
+  PipelineRecommendation,
   ProviderCatalog,
-  Recommendation,
   Selections,
   UploadResult,
 } from "@/types/api";
@@ -36,8 +36,17 @@ export async function uploadDocument(
   return data;
 }
 
-export async function analyzeDocument(docId: string): Promise<Recommendation> {
-  const { data } = await client.post<Recommendation>("/analyze", {
+/**
+ * Get an LLM-driven pipeline recommendation for an uploaded document.
+ *
+ * Called straight after `/upload` using the `doc_id` from its response. The
+ * backend tries Azure OpenAI first and transparently falls back to the local
+ * rules engine (reflected in `source`), so this never hard-fails on LLM issues.
+ */
+export async function recommendPipeline(
+  docId: string
+): Promise<PipelineRecommendation> {
+  const { data } = await client.post<PipelineRecommendation>("/recommend", {
     doc_id: docId,
   });
   return data;

@@ -39,6 +39,23 @@ export interface Recommendation {
   rationale: string;
 }
 
+/**
+ * Response from POST /api/recommend (PipelineRecommendation). Richer than
+ * Recommendation: also picks an LLM model, chunking strategy, and top_k.
+ * `source` is "llm" when Azure OpenAI produced it, "rules" on local fallback.
+ */
+export interface PipelineRecommendation {
+  embedding_model: string;
+  llm_model: string;
+  chunking_strategy: string;
+  chunk_size: number;
+  overlap: number;
+  top_k: number;
+  rationale: string;
+  confidence: number;
+  source: "llm" | "rules";
+}
+
 export interface Provider {
   id: string;
   name: string;

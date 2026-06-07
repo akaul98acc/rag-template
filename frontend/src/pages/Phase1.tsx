@@ -8,9 +8,13 @@ import CodeViewer from "@/components/CodeViewer";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { analyzeDocument, generateCode } from "@/services/api";
+import { recommendPipeline, generateCode } from "@/services/api";
 import { toast } from "@/hooks/use-toast";
-import type { Recommendation, UploadResult, GenerateResult } from "@/types/api";
+import type {
+  PipelineRecommendation,
+  UploadResult,
+  GenerateResult,
+} from "@/types/api";
 import {
   DOCUMENT_SIZE_OPTIONS,
   DOCUMENT_TYPE_OPTIONS,
@@ -63,7 +67,7 @@ function inferDocumentSize(pageCount?: number, sizeBytes?: number): string {
  * Update embedding model options based on recommendation.
  */
 function getEmbeddingOptionsWithRecommendation(
-  recommendation: Recommendation | null
+  recommendation: PipelineRecommendation | null
 ): OptionItem[] {
   if (!recommendation) return EMBEDDING_MODEL_OPTIONS;
 
@@ -93,9 +97,8 @@ function getEmbeddingOptionsWithRecommendation(
 export default function Phase1() {
   const [activeTab, setActiveTab] = useState<TabValue>("configure");
   const [upload, setUpload] = useState<UploadResult | null>(null);
-  const [recommendation, setRecommendation] = useState<Recommendation | null>(
-    null
-  );
+  const [recommendation, setRecommendation] =
+    useState<PipelineRecommendation | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [config, setConfig] = useState<ConfigState>(DEFAULT_CONFIG);
   const [generated, setGenerated] = useState<GenerateResult | null>(null);
@@ -124,24 +127,32 @@ export default function Phase1() {
     }));
 
     try {
-      const rec = await analyzeDocument(result.doc_id);
+      // Feed the doc_id from the /upload response into /recommend. The backend
+      // uses Azure OpenAI when configured and falls back to the local rules
+      // engine otherwise (rec.source reflects which path produced the result).
+      const rec = await recommendPipeline(result.doc_id);
       setRecommendation(rec);
 
-      // Update parameters based on recommendation
+      // Apply the recommended picks + parameters to the configurator so the
+      // agent's choices are reflected in the UI.
       setConfig((prev) => ({
         ...prev,
+        embeddingModel: rec.embedding_model,
+        llmModel: rec.llm_model,
+        chunkingStrategy: rec.chunking_strategy,
         parameters: {
           ...prev.parameters,
-          chunk_size: rec.chunk_size_tokens,
-          chunk_overlap: rec.chunk_overlap_tokens,
+          chunk_size: rec.chunk_size,
+          chunk_overlap: rec.overlap,
+          top_k: rec.top_k,
         },
       }));
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Analysis failed";
+        err instanceof Error ? err.message : "Recommendation failed";
       toast({
         variant: "destructive",
-        title: "Analysis failed",
+        title: "Recommendation failed",
         description: message,
       });
     } finally {
@@ -350,26 +361,34 @@ export default function Phase1() {
                 Agent Recommendations
               </h3>
               <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-3 text-sm">
-                <dt className="text-fg-muted">Chunk size</dt>
-                <dd className="text-fg font-medium">
-                  {recommendation.chunk_size_tokens} tokens
-                </dd>
-                <dt className="text-fg-muted">Chunk overlap</dt>
-                <dd className="text-fg font-medium">
-                  {recommendation.chunk_overlap_tokens} tokens
-                </dd>
                 <dt className="text-fg-muted">Embedding model</dt>
                 <dd className="text-fg font-medium">
                   {recommendation.embedding_model}
                 </dd>
-                <dt className="text-fg-muted">Search method</dt>
+                <dt className="text-fg-muted">LLM model</dt>
                 <dd className="text-fg font-medium">
-                  {recommendation.search_method}
+                  {recommendation.llm_model}
                 </dd>
+                <dt className="text-fg-muted">Chunking strategy</dt>
+                <dd className="text-fg font-medium">
+                  {recommendation.chunking_strategy}
+                </dd>
+                <dt className="text-fg-muted">Chunk size</dt>
+                <dd className="text-fg font-medium">
+                  {recommendation.chunk_size} tokens
+                </dd>
+                <dt className="text-fg-muted">Chunk overlap</dt>
+                <dd className="text-fg font-medium">
+                  {recommendation.overlap} tokens
+                </dd>
+                <dt className="text-fg-muted">Top-K results</dt>
+                <dd className="text-fg font-medium">{recommendation.top_k}</dd>
                 <dt className="text-fg-muted">Decision source</dt>
                 <dd className="text-fg font-medium">
-                  {recommendation.source} (
-                  {Math.round(recommendation.confidence * 100)}% confidence)
+                  {recommendation.source === "llm"
+                    ? "LLM (Azure OpenAI)"
+                    : "Rules engine (fallback)"}{" "}
+                  ({Math.round(recommendation.confidence * 100)}% confidence)
                 </dd>
               </dl>
               <div className="mt-4 p-4 bg-hover-soft rounded-lg">

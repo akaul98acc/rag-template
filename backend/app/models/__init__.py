@@ -1,18 +1,20 @@
 from app.models.document import DocumentMetadata, UploadResponse
 from app.models.strategy import (
-    AnalyzeRequest,
     GenerateRequest,
     GenerateResponse,
+    PipelineRecommendation,
     ProviderSelections,
+    RecommendRequest,
     StrategyRecommendation,
 )
 
 __all__ = [
-    "AnalyzeRequest",
     "DocumentMetadata",
     "GenerateRequest",
     "GenerateResponse",
+    "PipelineRecommendation",
     "ProviderSelections",
+    "RecommendRequest",
     "StrategyRecommendation",
     "UploadResponse",
 ]
