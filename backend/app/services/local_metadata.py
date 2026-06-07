@@ -48,7 +48,7 @@ def extract_metadata_local(
         size_bytes = len(content)
 
     # MIME type detection via filetype, fallback to mimetypes
-    mime_type = _detect_mime_type(content, original_name)
+    mime_type = detect_mime_type(content, original_name)
 
     # Initialize defaults
     page_count: int | None = None
@@ -131,8 +131,12 @@ def extract_metadata_local(
     )
 
 
-def _detect_mime_type(content: bytes, filename: str) -> str:
-    """Detect MIME type using filetype library, with mimetypes fallback."""
+def detect_mime_type(content: bytes, filename: str) -> str:
+    """Detect MIME type using filetype library, with mimetypes fallback.
+
+    Shared by the upload route's validation and the stored metadata so both
+    use the same detector and can never disagree.
+    """
     try:
         import filetype
 

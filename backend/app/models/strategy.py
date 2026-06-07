@@ -1,4 +1,24 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+# Allowed option vocabularies for the pipeline recommender. Mirrors
+# frontend/src/config/configuratorOptions.ts so the recommender can only pick
+# options the configurator UI knows about.
+EmbeddingModel = Literal[
+    "text-embedding-3-small",
+    "text-embedding-3-large",
+    "text-embedding-ada-002",
+]
+LLMModel = Literal["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"]
+ChunkingStrategy = Literal[
+    "auto",
+    "fixed",
+    "semantic",
+    "sliding",
+    "recursive",
+    "sentence",
+]
 
 
 class StrategyRecommendation(BaseModel):
@@ -11,8 +31,27 @@ class StrategyRecommendation(BaseModel):
     confidence: float
 
 
-class AnalyzeRequest(BaseModel):
+class RecommendRequest(BaseModel):
     doc_id: str
+
+
+class PipelineRecommendation(BaseModel):
+    """LLM- or rules-derived recommendation returned by POST /api/recommend.
+
+    Enum fields are constrained to the known configurator vocabularies so an
+    out-of-vocab LLM pick fails validation (and triggers the rules fallback)
+    rather than reaching the client.
+    """
+
+    embedding_model: EmbeddingModel
+    llm_model: LLMModel
+    chunking_strategy: ChunkingStrategy
+    chunk_size: int
+    overlap: int
+    top_k: int
+    rationale: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    source: Literal["llm", "rules"]
 
 
 class ProviderSelections(BaseModel):

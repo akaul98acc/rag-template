@@ -113,9 +113,9 @@ always returns a usable result. It is designed to be invoked directly after uplo
 
 | # | Question | Owner | Due | Resolution |
 |---|----------|-------|-----|------------|
-| 1 | Which Azure OpenAI `api-version` and deployment-name convention to standardize on? | Adarsh | impl | Pick a current GA api-version; deployment name via env |
-| 2 | Should `confidence` come from the model or be derived server-side? | Adarsh | impl | Prefer model-reported, clamp to [0,1]; default if absent |
-| 3 | Exact definition of "incomplete metadata" that triggers 422 (which fields are mandatory)? | Adarsh | impl | Define minimal required set during implementation |
+| 1 | Which Azure OpenAI `api-version` and deployment-name convention to standardize on? | Adarsh | impl | Pick a current GA api-version; deployment name via env | correct 
+| 2 | Should `confidence` come from the model or be derived server-side? | Adarsh | impl | Prefer model-reported, clamp to [0,1]; default if absent |from the model
+| 3 | Exact definition of "incomplete metadata" that triggers 422 (which fields are mandatory)? | Adarsh | impl | Define minimal required set during implementation | all of them are must have
 
 ---
 

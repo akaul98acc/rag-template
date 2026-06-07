@@ -1,4 +1,3 @@
-import mimetypes
 import uuid
 from pathlib import Path
 
@@ -7,7 +6,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from app.core.config import settings, SUPPORTED_MIME_TYPES
 from app.models import UploadResponse
 from app.services.document_analyzer import register_document
-from app.services.local_metadata import extract_metadata_local
+from app.services.local_metadata import detect_mime_type, extract_metadata_local
 
 router = APIRouter()
 
@@ -37,11 +36,10 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
             detail=f"File exceeds maximum size of {settings.max_upload_size_mb} MB",
         )
 
-    # Determine MIME type: prefer UploadFile.content_type, fall back to extension guess
-    mime_type = file.content_type
-    if not mime_type or mime_type == "application/octet-stream":
-        guessed, _ = mimetypes.guess_type(file.filename)
-        mime_type = guessed or "application/octet-stream"
+    # Determine MIME type using the same detector that produces the stored
+    # metadata (magic bytes via filetype, mimetypes fallback) so validation
+    # and metadata.mime_type can never disagree.
+    mime_type = detect_mime_type(content, file.filename)
 
     # Validate: supported MIME type
     if mime_type not in SUPPORTED_MIME_TYPES:
