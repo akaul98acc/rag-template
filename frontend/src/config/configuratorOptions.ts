@@ -76,7 +76,6 @@ export const EMBEDDING_MODEL_OPTIONS: OptionItem[] = [
     id: "text-embedding-3-large",
     title: "Ada 3 Large",
     description: "High quality · 3072 dims",
-    badge: { label: "perf", variant: "perf" },
   },
   {
     id: "text-embedding-ada-002",
@@ -99,7 +98,6 @@ export const LLM_MODEL_OPTIONS: OptionItem[] = [
     id: "gpt-4o",
     title: "GPT-4o",
     description: "Best quality · higher cost",
-    badge: { label: "perf", variant: "perf" },
   },
   {
     id: "gpt-4o-mini",
