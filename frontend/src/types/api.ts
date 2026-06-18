@@ -66,9 +66,23 @@ export interface Provider {
 
 export type ProviderCatalog = Record<StageId, Provider[]>;
 
+export interface PipelineParams {
+  chunk_size: number;
+  overlap: number;
+  embedding_model: string;
+  llm_model: string;
+  chunking_strategy: string;
+  top_k: number;
+}
+
 export interface GenerateResult {
   code: string;
   requires_env: string[];
+}
+
+export interface NotebookResult {
+  notebook: Record<string, unknown>;
+  filename: string;
 }
 
 export type Selections = Partial<Record<StageId, string>>;

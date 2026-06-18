@@ -2,6 +2,8 @@ from app.models.document import DocumentMetadata, UploadResponse
 from app.models.strategy import (
     GenerateRequest,
     GenerateResponse,
+    NotebookResponse,
+    PipelineParams,
     PipelineRecommendation,
     ProviderSelections,
     RecommendRequest,
@@ -12,6 +14,8 @@ __all__ = [
     "DocumentMetadata",
     "GenerateRequest",
     "GenerateResponse",
+    "NotebookResponse",
+    "PipelineParams",
     "PipelineRecommendation",
     "ProviderSelections",
     "RecommendRequest",

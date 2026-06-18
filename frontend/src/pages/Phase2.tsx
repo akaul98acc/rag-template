@@ -4,7 +4,7 @@ import CodeViewer from "@/components/CodeViewer";
 import { OptionCardGrid, type OptionItem } from "@/components/OptionCard";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { fetchProviders, generateCode } from "@/services/api";
+import { fetchProviders, generateCode, generateNotebook } from "@/services/api";
 import { toast } from "@/hooks/use-toast";
 import type {
   GenerateResult,
@@ -58,6 +58,7 @@ export default function Phase2() {
   const [selections, setSelections] = useState<Selections>({});
   const [generated, setGenerated] = useState<GenerateResult | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [generatingNotebook, setGeneratingNotebook] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,6 +119,23 @@ export default function Phase2() {
       });
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleGenerateNotebook() {
+    setGeneratingNotebook(true);
+    try {
+      await generateNotebook(selections);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Notebook generation failed";
+      toast({
+        variant: "destructive",
+        title: "Generation failed",
+        description: message,
+      });
+    } finally {
+      setGeneratingNotebook(false);
     }
   }
 
@@ -223,14 +241,24 @@ export default function Phase2() {
             );
           })}
 
-          <Button
-            variant="success"
-            onClick={handleGenerate}
-            disabled={!hasSelections || generating}
-            aria-label="Generate pipeline code from selected providers"
-          >
-            {generating ? "Generating..." : "Generate Code"}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="success"
+              onClick={handleGenerate}
+              disabled={!hasSelections || generating}
+              aria-label="Generate pipeline code from selected providers"
+            >
+              {generating ? "Generating..." : "Generate Code"}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={handleGenerateNotebook}
+              disabled={!hasSelections || generatingNotebook}
+              aria-label="Download pipeline as Jupyter notebook"
+            >
+              {generatingNotebook ? "Generating..." : "Generate Notebook"}
+            </Button>
+          </div>
         </TabsContent>
 
         <TabsContent value="compare">

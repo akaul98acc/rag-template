@@ -61,11 +61,26 @@ class ProviderSelections(BaseModel):
     vector_search: str | None = None
 
 
+class PipelineParams(BaseModel):
+    chunk_size: int = 512
+    overlap: int = 64
+    embedding_model: str = "text-embedding-3-large"
+    llm_model: str = "gpt-4o"
+    chunking_strategy: str = "fixed"
+    top_k: int = 5
+
+
 class GenerateRequest(BaseModel):
     selections: ProviderSelections
+    params: PipelineParams = Field(default_factory=PipelineParams)
 
 
 class GenerateResponse(BaseModel):
     code: str
     language: str = "python"
     requires_env: list[str] = []
+
+
+class NotebookResponse(BaseModel):
+    notebook: dict
+    filename: str = "rag_pipeline.ipynb"

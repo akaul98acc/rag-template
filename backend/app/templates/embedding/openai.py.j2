@@ -3,7 +3,14 @@ import os
 
 _client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
+_MODEL = "{{ params.embedding_model if params is defined else 'text-embedding-3-large' }}"
+_DIMENSIONS = {{ params.embedding_dims if params is defined else 3072 }}
 
-def embed(texts: list[str], model: str = "text-embedding-3-large") -> list[list[float]]:
+
+def embed(texts: list[str], model: str = _MODEL) -> list[list[float]]:
     resp = _client.embeddings.create(model=model, input=texts)
     return [d.embedding for d in resp.data]
+
+
+def embed_query(text: str) -> list[float]:
+    return embed([text])[0]

@@ -22,3 +22,4 @@ async def recommend(req: RecommendRequest) -> PipelineRecommendation:
         raise HTTPException(status_code=422, detail=_UPLOAD_AGAIN)
 
     return await recommend_pipeline(meta)
+

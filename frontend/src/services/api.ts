@@ -2,6 +2,8 @@ import axios from "axios";
 
 import type {
   GenerateResult,
+  NotebookResult,
+  PipelineParams,
   PipelineRecommendation,
   ProviderCatalog,
   Selections,
@@ -58,10 +60,31 @@ export async function fetchProviders(): Promise<ProviderCatalog> {
 }
 
 export async function generateCode(
-  selections: Selections
+  selections: Selections,
+  params?: PipelineParams
 ): Promise<GenerateResult> {
   const { data } = await client.post<GenerateResult>("/generate", {
     selections,
+    ...(params ? { params } : {}),
   });
   return data;
+}
+
+export async function generateNotebook(
+  selections: Selections,
+  params?: PipelineParams
+): Promise<void> {
+  const { data } = await client.post<NotebookResult>("/generate-notebook", {
+    selections,
+    ...(params ? { params } : {}),
+  });
+  const blob = new Blob([JSON.stringify(data.notebook, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = data.filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
