@@ -8,7 +8,7 @@ import CodeViewer from "@/components/CodeViewer";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { recommendPipeline, generateCode } from "@/services/api";
+import { recommendPipeline, generateCode, generateNotebook } from "@/services/api";
 import { toast } from "@/hooks/use-toast";
 import type {
   PipelineRecommendation,
@@ -108,6 +108,7 @@ export default function Phase1() {
   const [config, setConfig] = useState<ConfigState>(DEFAULT_CONFIG);
   const [generated, setGenerated] = useState<GenerateResult | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [generatingNotebook, setGeneratingNotebook] = useState(false);
 
   // Update options based on recommendation
   const embeddingOptions = useMemo(
@@ -211,13 +212,29 @@ export default function Phase1() {
   async function handleGenerate() {
     setGenerating(true);
     try {
+      const params = {
+        chunk_size: config.parameters.chunk_size ?? 512,
+        overlap: config.parameters.chunk_overlap ?? 64,
+        embedding_model:
+          config.embeddingModel === "auto"
+            ? "text-embedding-3-large"
+            : config.embeddingModel,
+        llm_model:
+          config.llmModel === "auto" ? "gpt-4o" : config.llmModel,
+        chunking_strategy:
+          config.chunkingStrategy === "auto" ? "fixed" : config.chunkingStrategy,
+        top_k: config.parameters.top_k ?? 5,
+      };
       // Phase 1 uses Azure-locked selections
-      const result = await generateCode({
-        storage: "azure_blob",
-        document_extraction: "azure_di",
-        embedding: "azure_openai",
-        vector_search: "azure_ai_search",
-      });
+      const result = await generateCode(
+        {
+          storage: "azure_blob",
+          document_extraction: "azure_di",
+          embedding: "azure_openai",
+          vector_search: "azure_ai_search",
+        },
+        params
+      );
       setGenerated(result);
       setActiveTab("code");
     } catch (err) {
@@ -230,6 +247,44 @@ export default function Phase1() {
       });
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleGenerateNotebook() {
+    setGeneratingNotebook(true);
+    try {
+      const params = {
+        chunk_size: config.parameters.chunk_size ?? 512,
+        overlap: config.parameters.chunk_overlap ?? 64,
+        embedding_model:
+          config.embeddingModel === "auto"
+            ? "text-embedding-3-large"
+            : config.embeddingModel,
+        llm_model:
+          config.llmModel === "auto" ? "gpt-4o" : config.llmModel,
+        chunking_strategy:
+          config.chunkingStrategy === "auto" ? "fixed" : config.chunkingStrategy,
+        top_k: config.parameters.top_k ?? 5,
+      };
+      await generateNotebook(
+        {
+          storage: "azure_blob",
+          document_extraction: "azure_di",
+          embedding: "azure_openai",
+          vector_search: "azure_ai_search",
+        },
+        params
+      );
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Notebook generation failed";
+      toast({
+        variant: "destructive",
+        title: "Generation failed",
+        description: message,
+      });
+    } finally {
+      setGeneratingNotebook(false);
     }
   }
 
@@ -376,14 +431,24 @@ export default function Phase1() {
                 </div>
               </div>
 
-              <Button
-                variant="success"
-                onClick={handleGenerate}
-                disabled={generating || !upload}
-                aria-label="Generate pipeline code"
-              >
-                {generating ? "Generating..." : "Generate Code"}
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  variant="success"
+                  onClick={handleGenerate}
+                  disabled={generating || !upload}
+                  aria-label="Generate pipeline code"
+                >
+                  {generating ? "Generating..." : "Generate Code"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={handleGenerateNotebook}
+                  disabled={generatingNotebook || !upload}
+                  aria-label="Download pipeline as Jupyter notebook"
+                >
+                  {generatingNotebook ? "Generating..." : "Generate Notebook"}
+                </Button>
+              </div>
             </>
           )}
         </TabsContent>

@@ -4,10 +4,17 @@ import os
 
 _bedrock = boto3.client("bedrock-runtime", region_name=os.environ["AWS_REGION"])
 
+_MODEL_ID = "amazon.titan-embed-text-v2:0"
+_DIMENSIONS = 1024
 
-def embed(texts: list[str], model_id: str = "amazon.titan-embed-text-v2:0") -> list[list[float]]:
+
+def embed(texts: list[str], model_id: str = _MODEL_ID) -> list[list[float]]:
     vectors = []
     for t in texts:
         resp = _bedrock.invoke_model(modelId=model_id, body=json.dumps({"inputText": t}))
         vectors.append(json.loads(resp["body"].read())["embedding"])
     return vectors
+
+
+def embed_query(text: str) -> list[float]:
+    return embed([text])[0]

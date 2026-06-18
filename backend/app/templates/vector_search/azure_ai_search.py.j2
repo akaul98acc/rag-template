@@ -1,15 +1,49 @@
 from azure.search.documents import SearchClient
+from azure.search.documents.indexes import SearchIndexClient
+from azure.search.documents.indexes.models import (
+    SearchIndex,
+    SimpleField,
+    SearchableField,
+    SearchField,
+    SearchFieldDataType,
+    VectorSearch,
+    HnswAlgorithmConfiguration,
+    VectorSearchProfile,
+)
 from azure.core.credentials import AzureKeyCredential
 import os
 
-_client = SearchClient(
-    endpoint=os.environ["AZURE_AI_SEARCH_ENDPOINT"],
-    index_name="rag-index",
-    credential=AzureKeyCredential(os.environ["AZURE_AI_SEARCH_KEY"]),
-)
+_credential = AzureKeyCredential(os.environ["AZURE_AI_SEARCH_KEY"])
+_endpoint = os.environ["AZURE_AI_SEARCH_ENDPOINT"]
+_INDEX_NAME = "rag-index"
+
+_index_client = SearchIndexClient(endpoint=_endpoint, credential=_credential)
+_client = SearchClient(endpoint=_endpoint, index_name=_INDEX_NAME, credential=_credential)
+
+
+def create_index(embedding_dimensions: int = 3072) -> None:
+    fields = [
+        SimpleField(name="id", type=SearchFieldDataType.String, key=True, filterable=True),
+        SearchableField(name="content", type=SearchFieldDataType.String),
+        SimpleField(name="source", type=SearchFieldDataType.String, filterable=True),
+        SimpleField(name="chunk_index", type=SearchFieldDataType.Int32, filterable=True, sortable=True),
+        SearchField(
+            name="embedding",
+            type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+            searchable=True,
+            vector_search_dimensions=embedding_dimensions,
+            vector_search_profile_name="rag-profile",
+        ),
+    ]
+    vector_search = VectorSearch(
+        algorithms=[HnswAlgorithmConfiguration(name="rag-hnsw")],
+        profiles=[VectorSearchProfile(name="rag-profile", algorithm_configuration_name="rag-hnsw")],
+    )
+    _index_client.create_or_update_index(SearchIndex(name=_INDEX_NAME, fields=fields, vector_search=vector_search))
 
 
 def upsert(docs: list[dict]) -> None:
+    # Each dict must contain: id (str), content (str), source (str), embedding (list[float])
     _client.upload_documents(documents=docs)
 
 
@@ -18,4 +52,7 @@ def search(query_vector: list[float], top_k: int = 5) -> list[dict]:
 
     vq = VectorizedQuery(vector=query_vector, k_nearest_neighbors=top_k, fields="embedding")
     results = _client.search(search_text=None, vector_queries=[vq])
-    return [dict(r) for r in results]
+    return [
+        {"id": r["id"], "content": r["content"], "source": r["source"], "chunk_index": r.get("chunk_index", 0), "score": r["@search.score"]}
+        for r in results
+    ]

@@ -1,10 +1,12 @@
 from google.cloud import documentai
+import os
 
 
 _client = documentai.DocumentProcessorServiceClient()
 
 
-def extract_text(processor_name: str, file_bytes: bytes, mime_type: str = "application/pdf") -> str:
+def extract_text(file_bytes: bytes, mime_type: str = "application/pdf") -> str:
+    processor_name = os.environ["GOOGLE_DOCAI_PROCESSOR_NAME"]
     raw_doc = documentai.RawDocument(content=file_bytes, mime_type=mime_type)
     request = documentai.ProcessRequest(name=processor_name, raw_document=raw_doc)
     result = _client.process_document(request=request)

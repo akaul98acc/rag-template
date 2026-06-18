@@ -1,8 +1,13 @@
 from sentence_transformers import SentenceTransformer
 
-
 _model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+_DIMENSIONS = 1024
 
 
 def embed(texts: list[str]) -> list[list[float]]:
     return _model.encode(texts, normalize_embeddings=True).tolist()
+
+
+def embed_query(text: str) -> list[float]:
+    return embed([text])[0]

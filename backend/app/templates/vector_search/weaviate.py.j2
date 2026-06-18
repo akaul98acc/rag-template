@@ -1,19 +1,52 @@
 import weaviate
+import weaviate.classes as wvc
 import os
 
 _client = weaviate.connect_to_wcs(
     cluster_url=os.environ["WEAVIATE_URL"],
     auth_credentials=weaviate.auth.AuthApiKey(os.environ["WEAVIATE_API_KEY"]),
 )
-_collection = _client.collections.get("RagChunk")
+_COLLECTION = "RagChunk"
 
 
-def upsert(ids: list[str], vectors: list[list[float]], metadatas: list[dict]) -> None:
+def create_collection(dimensions: int = 3072) -> None:
+    if not _client.collections.exists(_COLLECTION):
+        _client.collections.create(
+            name=_COLLECTION,
+            vectorizer_config=wvc.config.Configure.Vectorizer.none(),
+            vector_index_config=wvc.config.Configure.VectorIndex.hnsw(
+                distance_metric=wvc.config.VectorDistances.COSINE
+            ),
+            properties=[
+                wvc.config.Property(name="content", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="source", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="chunk_index", data_type=wvc.config.DataType.INT),
+            ],
+        )
+
+
+_collection = _client.collections.get(_COLLECTION)
+
+
+def upsert(docs: list[dict]) -> None:
+    # Each dict must contain: id (str), content (str), source (str), embedding (list[float])
     with _collection.batch.dynamic() as batch:
-        for i, v, m in zip(ids, vectors, metadatas):
-            batch.add_object(properties=m, uuid=i, vector=v)
+        for d in docs:
+            batch.add_object(
+                properties={"content": d["content"], "source": d["source"], "chunk_index": d.get("chunk_index", 0)},
+                uuid=d["id"],
+                vector=d["embedding"],
+            )
 
 
 def search(query_vector: list[float], top_k: int = 5) -> list[dict]:
-    res = _collection.query.near_vector(near_vector=query_vector, limit=top_k)
-    return [{"id": str(o.uuid), "metadata": o.properties} for o in res.objects]
+    res = _collection.query.near_vector(
+        near_vector=query_vector,
+        limit=top_k,
+        return_properties=["content", "source", "chunk_index"],
+        return_metadata=wvc.query.MetadataQuery(score=True),
+    )
+    return [
+        {"id": str(o.uuid), "content": o.properties.get("content", ""), "source": o.properties.get("source", ""), "chunk_index": o.properties.get("chunk_index", 0), "score": o.metadata.score}
+        for o in res.objects
+    ]

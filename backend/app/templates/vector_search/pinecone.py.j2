@@ -1,14 +1,36 @@
-from pinecone import Pinecone
+from pinecone import Pinecone, ServerlessSpec
 import os
 
 _pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-_index = _pc.Index("rag-index")
+_INDEX_NAME = "rag-index"
 
 
-def upsert(ids: list[str], vectors: list[list[float]], metadatas: list[dict]) -> None:
-    _index.upsert(vectors=list(zip(ids, vectors, metadatas)))
+def create_index(dimensions: int = 3072, cloud: str = "aws", region: str = "us-east-1") -> None:
+    if _INDEX_NAME not in [idx.name for idx in _pc.list_indexes()]:
+        _pc.create_index(
+            name=_INDEX_NAME,
+            dimension=dimensions,
+            metric="cosine",
+            spec=ServerlessSpec(cloud=cloud, region=region),
+        )
+
+
+_index = _pc.Index(_INDEX_NAME)
+
+
+def upsert(docs: list[dict]) -> None:
+    # Each dict must contain: id (str), content (str), source (str), embedding (list[float])
+    _index.upsert(
+        vectors=[
+            {"id": d["id"], "values": d["embedding"], "metadata": {"content": d["content"], "source": d["source"], "chunk_index": d.get("chunk_index", 0)}}
+            for d in docs
+        ]
+    )
 
 
 def search(query_vector: list[float], top_k: int = 5) -> list[dict]:
     res = _index.query(vector=query_vector, top_k=top_k, include_metadata=True)
-    return [{"id": m.id, "score": m.score, "metadata": m.metadata} for m in res.matches]
+    return [
+        {"id": m.id, "content": m.metadata.get("content", ""), "source": m.metadata.get("source", ""), "chunk_index": int(m.metadata.get("chunk_index", 0)), "score": m.score}
+        for m in res.matches
+    ]

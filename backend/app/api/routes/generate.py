@@ -9,6 +9,6 @@ router = APIRouter()
 @router.post("/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest) -> GenerateResponse:
     try:
-        return render_pipeline(req.selections)
+        return render_pipeline(req.selections, req.params)
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=f"unknown provider: {exc.args[0]}") from exc

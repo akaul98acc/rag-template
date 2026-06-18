@@ -1,20 +1,26 @@
 import faiss
 import numpy as np
 
-_dim = 1536
-_index = faiss.IndexFlatIP(_dim)
-_metadata: list[dict] = []
+# Match this to your embedding model: text-embedding-3-large=3072, text-embedding-3-small=1536, bge-large=1024
+_DIM = 3072
+_index = faiss.IndexFlatIP(_DIM)
+_store: list[dict] = []
 
 
-def upsert(vectors: list[list[float]], metadatas: list[dict]) -> None:
-    arr = np.array(vectors, dtype="float32")
+def upsert(docs: list[dict]) -> None:
+    # Each dict must contain: id (str), content (str), source (str), embedding (list[float])
+    arr = np.array([d["embedding"] for d in docs], dtype="float32")
     faiss.normalize_L2(arr)
     _index.add(arr)
-    _metadata.extend(metadatas)
+    _store.extend({"id": d["id"], "content": d["content"], "source": d["source"], "chunk_index": d.get("chunk_index", 0)} for d in docs)
 
 
 def search(query_vector: list[float], top_k: int = 5) -> list[dict]:
     q = np.array([query_vector], dtype="float32")
     faiss.normalize_L2(q)
     scores, idx = _index.search(q, top_k)
-    return [{"score": float(s), "metadata": _metadata[i]} for s, i in zip(scores[0], idx[0]) if i != -1]
+    return [
+        {"id": _store[i]["id"], "content": _store[i]["content"], "source": _store[i]["source"], "chunk_index": _store[i]["chunk_index"], "score": float(s)}
+        for s, i in zip(scores[0], idx[0])
+        if i != -1
+    ]

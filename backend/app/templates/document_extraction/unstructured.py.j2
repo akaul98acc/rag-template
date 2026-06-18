@@ -1,6 +1,15 @@
+import os
+import tempfile
 from unstructured.partition.auto import partition
 
 
-def extract_text(path: str) -> str:
-    elements = partition(filename=path)
-    return "\n".join(str(el) for el in elements)
+def extract_text(file_bytes: bytes, filename: str = "document.pdf") -> str:
+    suffix = os.path.splitext(filename)[1] or ".pdf"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(file_bytes)
+        tmp_path = f.name
+    try:
+        elements = partition(filename=tmp_path)
+        return "\n".join(str(el) for el in elements)
+    finally:
+        os.unlink(tmp_path)
