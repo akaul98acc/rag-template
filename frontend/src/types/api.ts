@@ -85,4 +85,14 @@ export interface NotebookResult {
   filename: string;
 }
 
+export interface ProviderRecommendation {
+  storage: string;
+  document_extraction: string;
+  embedding: string;
+  vector_search: string;
+  rationale: string;
+  confidence: number;
+  source: "llm" | "rules";
+}
+
 export type Selections = Partial<Record<StageId, string>>;
