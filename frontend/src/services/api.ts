@@ -6,6 +6,7 @@ import type {
   PipelineParams,
   PipelineRecommendation,
   ProviderCatalog,
+  ProviderRecommendation,
   Selections,
   UploadResult,
 } from "@/types/api";
@@ -51,6 +52,16 @@ export async function recommendPipeline(
   const { data } = await client.post<PipelineRecommendation>("/recommend", {
     doc_id: docId,
   });
+  return data;
+}
+
+export async function recommendProviders(
+  docId: string
+): Promise<ProviderRecommendation> {
+  const { data } = await client.post<ProviderRecommendation>(
+    "/recommend-providers",
+    { doc_id: docId }
+  );
   return data;
 }
 

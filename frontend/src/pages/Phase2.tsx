@@ -4,11 +4,18 @@ import CodeViewer from "@/components/CodeViewer";
 import { OptionCardGrid, type OptionItem } from "@/components/OptionCard";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { fetchProviders, generateCode, generateNotebook } from "@/services/api";
+import {
+  fetchProviders,
+  generateCode,
+  generateNotebook,
+  recommendProviders,
+} from "@/services/api";
+import { useUpload } from "@/contexts/UploadContext";
 import { toast } from "@/hooks/use-toast";
 import type {
   GenerateResult,
   ProviderCatalog,
+  ProviderRecommendation,
   Provider,
   Selections,
   StageId,
@@ -50,6 +57,26 @@ function getStageOptions(
   return providers.map(providerToOption);
 }
 
+/**
+ * Apply a "recommended" badge to the option matching recommendedId.
+ * Strips stale "recommended" badges from all other options.
+ */
+function applyRecommendationBadge(
+  options: OptionItem[],
+  recommendedId: string | undefined
+): OptionItem[] {
+  if (!recommendedId) return options;
+  return options.map((opt) => {
+    if (opt.id === recommendedId) {
+      return { ...opt, badge: { label: "recommended", variant: "recommended" as const } };
+    }
+    if (opt.badge?.variant === "recommended") {
+      return { ...opt, badge: undefined };
+    }
+    return opt;
+  });
+}
+
 export default function Phase2() {
   const [activeTab, setActiveTab] = useState<TabValue>("configure");
   const [catalog, setCatalog] = useState<ProviderCatalog | null>(null);
@@ -59,6 +86,11 @@ export default function Phase2() {
   const [generated, setGenerated] = useState<GenerateResult | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generatingNotebook, setGeneratingNotebook] = useState(false);
+  const [providerRec, setProviderRec] = useState<ProviderRecommendation | null>(null);
+  const [recLoading, setRecLoading] = useState(false);
+  const [recError, setRecError] = useState<string | null>(null);
+
+  const { uploadResult } = useUpload();
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +116,39 @@ export default function Phase2() {
     };
   }, []);
 
+  // Auto-recommend providers when both catalog and upload result are available
+  useEffect(() => {
+    if (!catalog || !uploadResult) return;
+    let cancelled = false;
+    setRecLoading(true);
+    setRecError(null);
+    recommendProviders(uploadResult.doc_id)
+      .then((rec) => {
+        if (cancelled) return;
+        setProviderRec(rec);
+        setSelections({
+          storage: rec.storage,
+          document_extraction: rec.document_extraction,
+          embedding: rec.embedding,
+          vector_search: rec.vector_search,
+        });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setRecError(
+          err instanceof Error
+            ? err.message
+            : "Could not get provider recommendations"
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setRecLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [catalog, uploadResult]);
+
   // Get selected providers for comparison
   const selectedProviders = useMemo(() => {
     if (!catalog) return [];
@@ -97,6 +162,19 @@ export default function Phase2() {
       };
     }).filter((s) => s.provider);
   }, [catalog, selections]);
+
+  // Apply recommendation badges per stage
+  const stageOptions = useMemo(() => {
+    return Object.fromEntries(
+      STAGES.map((stage) => {
+        const options = getStageOptions(catalog, stage.id);
+        const recId = providerRec?.[stage.id as keyof ProviderRecommendation] as
+          | string
+          | undefined;
+        return [stage.id, applyRecommendationBadge(options, recId)];
+      })
+    ) as Record<StageId, OptionItem[]>;
+  }, [catalog, providerRec]);
 
   function select(stage: StageId, providerId: string) {
     setSelections((prev) => ({ ...prev, [stage]: providerId }));
@@ -142,6 +220,8 @@ export default function Phase2() {
   function handleReset() {
     setSelections({});
     setGenerated(null);
+    setProviderRec(null);
+    setRecError(null);
     setActiveTab("configure");
   }
 
@@ -225,8 +305,28 @@ export default function Phase2() {
         </TabsList>
 
         <TabsContent value="configure">
+          {recLoading && (
+            <div className="bg-surface border border-border rounded-lg px-4 py-3 mb-4 text-sm text-fg-muted">
+              Getting provider recommendations&hellip;
+            </div>
+          )}
+          {recError && (
+            <div
+              role="alert"
+              className="bg-surface border border-danger rounded-lg px-4 py-3 mb-4 text-sm text-error-text flex items-center justify-between"
+            >
+              <span>Could not load recommendations: {recError}</span>
+              <button
+                onClick={() => setRecError(null)}
+                className="ml-4 text-fg-muted hover:text-fg"
+              >
+                &times;
+              </button>
+            </div>
+          )}
+
           {STAGES.map((stage) => {
-            const options = getStageOptions(catalog, stage.id);
+            const options = stageOptions[stage.id] ?? [];
             if (options.length === 0) return null;
 
             return (
@@ -240,6 +340,14 @@ export default function Phase2() {
               />
             );
           })}
+
+          {providerRec && (
+            <div className="mb-4 p-4 bg-hover-soft rounded-lg">
+              <p className="text-sm text-fg-muted italic m-0">
+                {providerRec.rationale}
+              </p>
+            </div>
+          )}
 
           <div className="flex gap-2">
             <Button

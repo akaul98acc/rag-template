@@ -1,4 +1,6 @@
 import { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import { useUpload } from "@/contexts/UploadContext";
 
 import DocumentUploadSection from "@/components/DocumentUploadSection";
 import { OptionCardGrid, type OptionItem } from "@/components/OptionCard";
@@ -110,6 +112,9 @@ export default function Phase1() {
   const [generating, setGenerating] = useState(false);
   const [generatingNotebook, setGeneratingNotebook] = useState(false);
 
+  const { setUploadResult } = useUpload();
+  const navigate = useNavigate();
+
   // Update options based on recommendation
   const embeddingOptions = useMemo(
     () =>
@@ -147,6 +152,7 @@ export default function Phase1() {
 
   async function handleUploaded(result: UploadResult) {
     setUpload(result);
+    setUploadResult(result);
     setRecommendation(null);
     setGenerated(null);
     setAnalyzing(true);
@@ -290,6 +296,7 @@ export default function Phase1() {
 
   function handleReset() {
     setUpload(null);
+    setUploadResult(null);
     setRecommendation(null);
     setGenerated(null);
     setConfig(DEFAULT_CONFIG);
@@ -447,6 +454,14 @@ export default function Phase1() {
                   aria-label="Download pipeline as Jupyter notebook"
                 >
                   {generatingNotebook ? "Generating..." : "Generate Notebook"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => navigate("/phase2")}
+                  disabled={!upload}
+                  aria-label="Compare providers in Phase 2"
+                >
+                  Select Provider
                 </Button>
               </div>
             </>

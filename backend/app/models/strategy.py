@@ -84,3 +84,13 @@ class GenerateResponse(BaseModel):
 class NotebookResponse(BaseModel):
     notebook: dict
     filename: str = "rag_pipeline.ipynb"
+
+
+class ProviderRecommendation(BaseModel):
+    storage: str
+    document_extraction: str
+    embedding: str
+    vector_search: str
+    rationale: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    source: Literal["llm", "rules"]

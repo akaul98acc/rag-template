@@ -3,9 +3,11 @@ import Phase1 from "./pages/Phase1";
 import Phase2 from "./pages/Phase2";
 import ThemeToggle from "./components/ThemeToggle";
 import { Toaster } from "./components/ui/toaster";
+import { UploadProvider } from "@/contexts/UploadContext";
 
 export default function App() {
   return (
+    <UploadProvider>
     <div className="min-h-screen flex flex-col bg-bg text-fg">
       <header className="flex items-center gap-6 px-8 py-4 bg-surface border-b border-border">
         <h1 className="m-0 text-xl font-semibold">RAG Builder</h1>
@@ -36,5 +38,6 @@ export default function App() {
       </main>
       <Toaster />
     </div>
+    </UploadProvider>
   );
 }
