@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.models import PipelineRecommendation, RecommendRequest
 from app.services.document_analyzer import get_document
@@ -11,7 +11,9 @@ _UPLOAD_AGAIN = "Document not found or expired — please upload the document ag
 
 
 @router.post("/recommend", response_model=PipelineRecommendation)
-async def recommend(req: RecommendRequest) -> PipelineRecommendation:
+async def recommend(
+    req: RecommendRequest, background_tasks: BackgroundTasks
+) -> PipelineRecommendation:
     doc = await get_document(req.doc_id)
     if doc is None:
         raise HTTPException(status_code=422, detail=_UPLOAD_AGAIN)
@@ -25,5 +27,5 @@ async def recommend(req: RecommendRequest) -> PipelineRecommendation:
     if req.document_type:
         meta = meta.model_copy(update={"doc_type": req.document_type})
 
-    return await recommend_pipeline(meta)
+    return await recommend_pipeline(meta, background_tasks=background_tasks, doc_id=req.doc_id)
 

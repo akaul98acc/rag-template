@@ -53,6 +53,7 @@ class PipelineRecommendation(BaseModel):
     rationale: str
     confidence: float = Field(ge=0.0, le=1.0)
     source: Literal["llm", "rules"]
+    recommendation_id: str | None = None
 
 
 class ProviderSelections(BaseModel):
