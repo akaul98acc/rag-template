@@ -13,11 +13,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import get_args
+import uuid
+from typing import Any, get_args
+
+from fastapi import BackgroundTasks
 
 from app.core.config import settings
-from app.models import DocumentMetadata, PipelineRecommendation
+from app.models import DocumentMetadata, PipelineRecommendation, RecommendationRecord
 from app.models.strategy import ChunkingStrategy, EmbeddingModel, LLMModel
+from app.services.recommendation_store import save_recommendation
 from app.services.strategy_agent import recommend_strategy
 
 logger = logging.getLogger(__name__)
@@ -48,15 +52,27 @@ def is_azure_openai_configured() -> bool:
     )
 
 
-async def recommend_pipeline(meta: DocumentMetadata) -> PipelineRecommendation:
+async def recommend_pipeline(
+    meta: DocumentMetadata,
+    background_tasks: BackgroundTasks | None = None,
+    doc_id: str | None = None,
+) -> PipelineRecommendation:
     """Recommend a pipeline configuration from document metadata.
 
     LLM-first with a deterministic rules fallback. Never raises for an
     LLM-side problem; only programming errors would propagate.
+    Persists every result asynchronously via BackgroundTasks.
     """
+    rec_id = str(uuid.uuid4())
+    raw_llm_response: dict[str, Any] | None = None
+    model_version: str
+
     if is_azure_openai_configured():
         try:
-            result = await _llm_recommend(meta)
+            result, raw_llm_response = await _llm_recommend(meta)
+            model_version = (
+                f"{settings.azure_openai_deployment}-{settings.azure_openai_api_version}"
+            )
             logger.info(
                 "Pipeline recommendation via LLM for %s: embedding=%s, llm=%s, chunking=%s",
                 meta.filename,
@@ -64,22 +80,79 @@ async def recommend_pipeline(meta: DocumentMetadata) -> PipelineRecommendation:
                 result.llm_model,
                 result.chunking_strategy,
             )
-            return result
         except Exception as exc:  # noqa: BLE001 - degrade gracefully on any LLM failure
             logger.warning(
                 "Azure OpenAI recommendation failed, falling back to rules: %s", exc
             )
+            result = await _rules_recommend(meta)
+            model_version = "rules-v1"
     else:
         logger.info(
             "Azure OpenAI not configured - using rules engine for %s", meta.filename
         )
+        result = await _rules_recommend(meta)
+        model_version = "rules-v1"
 
-    return await _rules_recommend(meta)
+    record = _build_record(rec_id, doc_id, meta, result, model_version, raw_llm_response)
+    if background_tasks is not None:
+        background_tasks.add_task(_persist_recommendation, record)
+    else:
+        asyncio.create_task(_persist_recommendation(record))
+
+    return result.model_copy(update={"recommendation_id": rec_id})
 
 
-async def _llm_recommend(meta: DocumentMetadata) -> PipelineRecommendation:
+def _build_record(
+    rec_id: str,
+    doc_id: str | None,
+    meta: DocumentMetadata,
+    result: PipelineRecommendation,
+    model_version: str,
+    raw_llm_response: dict[str, Any] | None,
+) -> RecommendationRecord:
+    return RecommendationRecord(
+        rec_id=rec_id,
+        doc_id=doc_id,
+        source=result.source,
+        model_version=model_version,
+        confidence=result.confidence,
+        raw_llm_response=raw_llm_response,
+        filename=meta.filename,
+        size_bytes=meta.size_bytes,
+        page_count=meta.page_count,
+        is_scanned=meta.is_scanned,
+        has_tables=meta.has_tables,
+        table_count=meta.tables,
+        image_count=meta.images,
+        doc_type=meta.doc_type,
+        content_type=meta.content_type,
+        text_density=meta.text_density,
+        avg_words_per_page=meta.avg_words_per_page,
+        table_ratio=meta.table_ratio,
+        avg_sentence_length=meta.avg_sentence_length,
+        chunking_strategy=result.chunking_strategy,
+        chunk_size=result.chunk_size,
+        overlap=result.overlap,
+        embedding_model=result.embedding_model,
+        llm_model=result.llm_model,
+        top_k=result.top_k,
+        rationale=result.rationale,
+    )
+
+
+async def _persist_recommendation(record: RecommendationRecord) -> None:
+    try:
+        await save_recommendation(record)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to persist recommendation %s: %s", record.rec_id, exc)
+
+
+async def _llm_recommend(
+    meta: DocumentMetadata,
+) -> tuple[PipelineRecommendation, dict[str, Any]]:
     """Call Azure OpenAI and parse a validated recommendation.
 
+    Returns the parsed recommendation and the raw LLM response dict.
     Raises on missing SDK, transport/API errors, malformed JSON, or an
     out-of-vocab pick (Pydantic Literal validation) - all caught by the caller.
     """
@@ -121,7 +194,7 @@ async def _llm_recommend(meta: DocumentMetadata) -> PipelineRecommendation:
         confidence = DEFAULT_CONFIDENCE
 
     # Literal validation rejects out-of-vocab picks -> raises -> rules fallback.
-    return PipelineRecommendation(
+    rec = PipelineRecommendation(
         embedding_model=data["embedding_model"],
         llm_model=data["llm_model"],
         chunking_strategy=data["chunking_strategy"],
@@ -132,6 +205,7 @@ async def _llm_recommend(meta: DocumentMetadata) -> PipelineRecommendation:
         confidence=confidence,
         source="llm",
     )
+    return rec, data
 
 
 async def _rules_recommend(meta: DocumentMetadata) -> PipelineRecommendation:
