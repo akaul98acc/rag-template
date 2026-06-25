@@ -57,6 +57,46 @@ def _large(meta: DocumentMetadata) -> RuleHit | None:
     return None
 
 
+def _doc_type(meta: DocumentMetadata) -> RuleHit | None:
+    if meta.doc_type == "legal_contract":
+        return RuleHit(
+            chunk_size_tokens=1024,
+            chunk_overlap_tokens=128,
+            embedding_model="text-embedding-3-large",
+            search_method="hybrid_bm25_dense",
+            rationale="Legal contract — dense cross-referential text benefits from large chunks and hybrid search.",
+            confidence=0.85,
+        )
+    if meta.doc_type == "research_paper":
+        return RuleHit(
+            chunk_size_tokens=512,
+            chunk_overlap_tokens=64,
+            embedding_model="text-embedding-3-large",
+            search_method="faiss",
+            rationale="Research paper — semantic sections benefit from moderate chunks and dense vector search.",
+            confidence=0.82,
+        )
+    if meta.doc_type in ("invoice", "financial_statement"):
+        return RuleHit(
+            chunk_size_tokens=256,
+            chunk_overlap_tokens=32,
+            embedding_model="text-embedding-3-small",
+            search_method="cosine",
+            rationale="Structured financial document — small precise chunks with cosine similarity.",
+            confidence=0.80,
+        )
+    if meta.doc_type == "presentation":
+        return RuleHit(
+            chunk_size_tokens=256,
+            chunk_overlap_tokens=16,
+            embedding_model="text-embedding-3-large",
+            search_method="faiss",
+            rationale="Presentation slides — short, self-contained chunks per slide with dense retrieval.",
+            confidence=0.78,
+        )
+    return None
+
+
 def _medium(meta: DocumentMetadata) -> RuleHit | None:
     return RuleHit(
         chunk_size_tokens=512,
@@ -68,7 +108,7 @@ def _medium(meta: DocumentMetadata) -> RuleHit | None:
     )
 
 
-RULES: list[Rule] = [_tiny, _scanned, _large, _medium]
+RULES: list[Rule] = [_tiny, _scanned, _large, _doc_type, _medium]
 
 
 async def recommend_strategy(meta: DocumentMetadata) -> StrategyRecommendation:

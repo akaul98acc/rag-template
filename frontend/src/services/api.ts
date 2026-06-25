@@ -47,10 +47,12 @@ export async function uploadDocument(
  * rules engine (reflected in `source`), so this never hard-fails on LLM issues.
  */
 export async function recommendPipeline(
-  docId: string
+  docId: string,
+  documentType?: string
 ): Promise<PipelineRecommendation> {
   const { data } = await client.post<PipelineRecommendation>("/recommend", {
     doc_id: docId,
+    ...(documentType ? { document_type: documentType } : {}),
   });
   return data;
 }

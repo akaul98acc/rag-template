@@ -101,7 +101,7 @@ function applyRecommendationBadge(
   });
 }
 
-export default function Phase1() {
+export default function Step1() {
   const [activeTab, setActiveTab] = useState<TabValue>("configure");
   const [upload, setUpload] = useState<UploadResult | null>(null);
   const [recommendation, setRecommendation] =
@@ -157,21 +157,23 @@ export default function Phase1() {
     setGenerated(null);
     setAnalyzing(true);
 
-    // Auto-infer document size from metadata
+    // Auto-infer document size and type from metadata
     const inferredSize = inferDocumentSize(
       result.metadata.page_count,
       result.metadata.size_bytes
     );
+    const inferredDocType = result.metadata.doc_type ?? "";
     setConfig((prev) => ({
       ...prev,
       documentSize: inferredSize || prev.documentSize,
+      documentType: inferredDocType || prev.documentType,
     }));
 
     try {
-      // Feed the doc_id from the /upload response into /recommend. The backend
+      // Feed the doc_id and inferred doc type into /recommend. The backend
       // uses Azure OpenAI when configured and falls back to the local rules
       // engine otherwise (rec.source reflects which path produced the result).
-      const rec = await recommendPipeline(result.doc_id);
+      const rec = await recommendPipeline(result.doc_id, inferredDocType || undefined);
       setRecommendation(rec);
 
       // Apply the recommended picks + parameters to the configurator so the
@@ -231,7 +233,7 @@ export default function Phase1() {
           config.chunkingStrategy === "auto" ? "fixed" : config.chunkingStrategy,
         top_k: config.parameters.top_k ?? 5,
       };
-      // Phase 1 uses Azure-locked selections
+      // Step 1 uses Azure-locked selections
       const result = await generateCode(
         {
           storage: "azure_blob",
@@ -323,7 +325,7 @@ export default function Phase1() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-semibold mt-0 mb-1">
-            Phase 1: Strategy Agent
+            Step 1: Strategy Agent
           </h2>
           <p className="text-fg-muted text-sm m-0">
             Upload a document and configure your RAG pipeline strategy.
@@ -386,7 +388,7 @@ export default function Phase1() {
                 options={DOCUMENT_TYPE_OPTIONS}
                 selected={config.documentType}
                 onSelect={(id) => updateConfig("documentType", id)}
-                columns={2}
+                columns={4}
               />
 
               <OptionCardGrid
@@ -457,9 +459,9 @@ export default function Phase1() {
                 </Button>
                 <Button
                   variant="ghost"
-                  onClick={() => navigate("/phase2")}
+                  onClick={() => navigate("/step2")}
                   disabled={!upload}
-                  aria-label="Compare providers in Phase 2"
+                  aria-label="Compare providers in Step 2"
                 >
                   Select Provider
                 </Button>

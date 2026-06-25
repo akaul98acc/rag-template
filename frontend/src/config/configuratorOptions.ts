@@ -33,22 +33,42 @@ export const DOCUMENT_TYPE_OPTIONS: OptionItem[] = [
   {
     id: "technical",
     title: "Technical docs",
-    description: "Code, APIs, manuals",
+    description: "Code, APIs, specifications",
   },
   {
-    id: "legal",
+    id: "legal_contract",
     title: "Legal / contracts",
-    description: "Dense, precise text",
+    description: "Dense, cross-referential text",
   },
   {
-    id: "research",
+    id: "research_paper",
     title: "Research papers",
-    description: "Academic, structured",
+    description: "Academic, structured sections",
+  },
+  {
+    id: "financial_statement",
+    title: "Financial reports",
+    description: "Statements, balance sheets",
+  },
+  {
+    id: "invoice",
+    title: "Invoice / receipt",
+    description: "Structured billing docs",
+  },
+  {
+    id: "report",
+    title: "Business report",
+    description: "Corporate, market reports",
+  },
+  {
+    id: "presentation",
+    title: "Presentation",
+    description: "Slides, decks, pitches",
   },
   {
     id: "general",
     title: "General / mixed",
-    description: "Reports, wikis, misc",
+    description: "Wikis, emails, misc",
   },
 ];
 

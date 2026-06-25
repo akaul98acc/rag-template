@@ -77,7 +77,7 @@ function applyRecommendationBadge(
   });
 }
 
-export default function Phase2() {
+export default function Step2() {
   const [activeTab, setActiveTab] = useState<TabValue>("configure");
   const [catalog, setCatalog] = useState<ProviderCatalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -229,7 +229,7 @@ export default function Phase2() {
     return (
       <section>
         <h2 className="text-2xl font-semibold mt-0 mb-2">
-          Phase 2: Provider Comparator
+          Step 2: Provider Comparator
         </h2>
         <div className="bg-surface border border-border rounded-lg p-6 text-center">
           <p className="text-fg-muted">Loading provider catalog...</p>
@@ -242,7 +242,7 @@ export default function Phase2() {
     return (
       <section>
         <h2 className="text-2xl font-semibold mt-0 mb-2">
-          Phase 2: Provider Comparator
+          Step 2: Provider Comparator
         </h2>
         <div
           role="alert"
@@ -261,7 +261,7 @@ export default function Phase2() {
     return (
       <section>
         <h2 className="text-2xl font-semibold mt-0 mb-2">
-          Phase 2: Provider Comparator
+          Step 2: Provider Comparator
         </h2>
         <div className="bg-surface border border-border rounded-lg p-6 text-center">
           <p className="text-fg-muted">No providers configured.</p>
@@ -277,7 +277,7 @@ export default function Phase2() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-semibold mt-0 mb-1">
-            Phase 2: Provider Comparator
+            Step 2: Provider Comparator
           </h2>
           <p className="text-fg-muted text-sm m-0">
             Select providers for each pipeline stage and generate code.

@@ -22,12 +22,14 @@ SENTENCE_LENGTH_PROSE_THRESHOLD = 15  # >= 15 for prose
 
 # Filename keyword patterns for doc_type inference (lowercased)
 DOC_TYPE_KEYWORDS: dict[str, list[str]] = {
-    "financial_statement": ["statement", "balance", "income", "cash flow", "cashflow"],
-    "invoice": ["invoice"],
-    "legal_contract": ["contract", "agreement", "nda"],
-    "resume": ["resume", "cv"],
-    "research_paper": ["paper", "journal", "abstract"],
-    "report": ["report"],
+    "financial_statement": ["statement", "balance", "income", "cash flow", "cashflow", "p&l", "pnl", "earnings"],
+    "invoice": ["invoice", "receipt", "billing", "bill"],
+    "legal_contract": ["contract", "agreement", "nda", "terms", "amendment", "clause"],
+    "resume": ["resume", "cv", "curriculum vitae"],
+    "research_paper": ["paper", "journal", "abstract", "arxiv", "preprint"],
+    "report": ["report", "analysis", "summary"],
+    "presentation": ["presentation", "slides", "deck", "pitch"],
+    "technical": ["spec", "specification", "readme", "api", "docs", "manual", "guide", "handbook"],
 }
 
 
