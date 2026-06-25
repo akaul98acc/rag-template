@@ -12,7 +12,7 @@ _UPLOAD_AGAIN = "Document not found or expired — please upload the document ag
 
 @router.post("/recommend", response_model=PipelineRecommendation)
 async def recommend(req: RecommendRequest) -> PipelineRecommendation:
-    doc = get_document(req.doc_id)
+    doc = await get_document(req.doc_id)
     if doc is None:
         raise HTTPException(status_code=422, detail=_UPLOAD_AGAIN)
 

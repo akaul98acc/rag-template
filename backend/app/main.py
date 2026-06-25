@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import generate, notebook, providers, recommend, recommend_providers, upload
 from app.core.config import settings
 from app.services.azure_document_intelligence import is_azure_di_configured
+from app.services.database import close_db, init_db
 
 # Make app INFO logs visible alongside uvicorn output. Without this the
 # document_analyzer "Azure DI ..." messages are emitted at INFO and dropped.
@@ -19,7 +20,24 @@ app = FastAPI(title="RAG Builder", version="0.1.0")
 
 
 @app.on_event("startup")
-async def _log_di_status() -> None:
+async def _startup() -> None:
+    # --- PostgreSQL document store ---
+    if settings.database_url:
+        try:
+            await init_db(settings.database_url)
+        except Exception as exc:
+            logger.error(
+                "Failed to connect to PostgreSQL (%s) — falling back to in-memory store: %s",
+                settings.database_url,
+                exc,
+            )
+    else:
+        logger.warning(
+            "DATABASE_URL not set — document store is in-memory only "
+            "(documents lost on process restart)"
+        )
+
+    # --- Azure Document Intelligence ---
     if is_azure_di_configured():
         auth = "API key" if settings.azure_docint_key else "DefaultAzureCredential"
         logger.info(
@@ -32,6 +50,11 @@ async def _log_di_status() -> None:
             "Azure Document Intelligence NOT configured "
             "(set azure_docint_endpoint in backend/.env) - uploads use local pypdf fallback"
         )
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    await close_db()
 
 app.add_middleware(
     CORSMiddleware,

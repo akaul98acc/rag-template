@@ -11,7 +11,7 @@ _UPLOAD_AGAIN = "Document not found or expired — please upload the document ag
 
 @router.post("/recommend-providers", response_model=ProviderRecommendation)
 async def recommend_providers_route(req: RecommendRequest) -> ProviderRecommendation:
-    doc = get_document(req.doc_id)
+    doc = await get_document(req.doc_id)
     if doc is None:
         raise HTTPException(status_code=422, detail=_UPLOAD_AGAIN)
     meta = doc.metadata
