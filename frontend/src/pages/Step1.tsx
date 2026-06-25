@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useUpload } from "@/contexts/UploadContext";
 
@@ -112,8 +112,31 @@ export default function Step1() {
   const [generating, setGenerating] = useState(false);
   const [generatingNotebook, setGeneratingNotebook] = useState(false);
 
-  const { setUploadResult } = useUpload();
+  const { setUploadResult, restoredItem, clearRestoredItem } = useUpload();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!restoredItem) return;
+    setUpload({ doc_id: restoredItem.doc_id, metadata: restoredItem.metadata });
+    setRecommendation(restoredItem.recommendation);
+    if (restoredItem.recommendation) {
+      const rec = restoredItem.recommendation;
+      setConfig((prev) => ({
+        ...prev,
+        embeddingModel: rec.embedding_model,
+        llmModel: rec.llm_model,
+        chunkingStrategy: rec.chunking_strategy,
+        parameters: {
+          ...prev.parameters,
+          chunk_size: rec.chunk_size,
+          chunk_overlap: rec.overlap,
+          top_k: rec.top_k,
+        },
+      }));
+    }
+    setActiveTab("decisions");
+    clearRestoredItem();
+  }, [restoredItem]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update options based on recommendation
   const embeddingOptions = useMemo(

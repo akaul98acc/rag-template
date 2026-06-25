@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import feedback, generate, notebook, providers, recommend, recommend_providers, upload
+from app.api.routes import feedback, generate, history, notebook, providers, recommend, recommend_providers, upload
 from app.core.config import settings
 from app.services.azure_document_intelligence import is_azure_di_configured
 from app.services.database import close_db, init_db
@@ -71,6 +71,7 @@ app.include_router(generate.router, prefix="/api", tags=["step2"])
 app.include_router(notebook.router, prefix="/api", tags=["step2"])
 app.include_router(recommend_providers.router, prefix="/api", tags=["step2"])
 app.include_router(feedback.router, prefix="/api", tags=["feedback"])
+app.include_router(history.router, prefix="/api", tags=["history"])
 
 
 @app.get("/api/health")

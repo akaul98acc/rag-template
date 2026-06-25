@@ -36,6 +36,9 @@ _conn: Any = None  # psycopg2 connection or None
 # In-memory fallback — used when DATABASE_URL is not set or DB is unavailable
 _DOCS_FALLBACK: dict[str, "_StoredDocumentRow"] = {}
 
+# In-memory fallback for provider recommendations (keyed by doc_id)
+_PROVIDER_RECS_FALLBACK: dict[str, dict] = {}
+
 
 @dataclass
 class _StoredDocumentRow:
@@ -148,6 +151,9 @@ def _ensure_schema(conn: Any) -> None:
 
         cur.execute(_CREATE_RECOMMENDATIONS_SQL)
         cur.execute(_CREATE_RECOMMENDATION_FEEDBACK_SQL)
+        cur.execute(
+            "ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS provider_recommendation JSONB"
+        )
 
 
 async def init_db(database_url: str) -> None:
@@ -261,6 +267,114 @@ async def db_get_document(doc_id: str) -> _StoredDocumentRow | None:
         )
 
     return await asyncio.to_thread(_select)
+
+
+async def db_save_provider_recommendation(doc_id: str, provider_rec_dict: dict) -> None:
+    """Persist a provider recommendation against the most-recent recommendations row."""
+    if _conn is None:
+        _PROVIDER_RECS_FALLBACK[doc_id] = provider_rec_dict
+        return
+
+    provider_rec_json = json.dumps(provider_rec_dict)
+
+    def _update() -> None:
+        with _lock:
+            with _conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE recommendations
+                    SET provider_recommendation = %s::jsonb
+                    WHERE id = (
+                        SELECT id FROM recommendations
+                        WHERE doc_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    )
+                    """,
+                    (provider_rec_json, doc_id),
+                )
+
+    await asyncio.to_thread(_update)
+
+
+async def db_get_history() -> list[dict]:
+    """Return all documents joined with their latest recommendation, newest first."""
+    if _conn is None:
+        from datetime import datetime, timezone
+
+        rows: list[dict] = []
+        for stored in _DOCS_FALLBACK.values():
+            metadata = json.loads(stored.metadata_json)
+            rows.append(
+                {
+                    "doc_id": stored.doc_id,
+                    "filename": stored.filename,
+                    "metadata": metadata,
+                    "created_at": datetime.now(tz=timezone.utc),
+                    "recommendation_id": None,
+                    "chunking_strategy": None,
+                    "chunk_size": None,
+                    "overlap": None,
+                    "embedding_model": None,
+                    "llm_model": None,
+                    "top_k": None,
+                    "rationale": None,
+                    "confidence": None,
+                    "source": None,
+                    "provider_recommendation": _PROVIDER_RECS_FALLBACK.get(stored.doc_id),
+                }
+            )
+        # newest first by insertion order isn't guaranteed, but this is best-effort
+        return list(reversed(rows))
+
+    def _query() -> list[dict]:
+        with _lock:
+            with _conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        d.doc_id,
+                        d.filename,
+                        d.metadata,
+                        d.created_at,
+                        r.id                      AS recommendation_id,
+                        r.chunking_strategy,
+                        r.chunk_size,
+                        r.overlap,
+                        r.embedding_model,
+                        r.llm_model,
+                        r.top_k,
+                        r.rationale,
+                        r.confidence,
+                        r.source,
+                        r.provider_recommendation
+                    FROM documents d
+                    LEFT JOIN LATERAL (
+                        SELECT * FROM recommendations
+                        WHERE doc_id = d.doc_id
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    ) r ON true
+                    ORDER BY d.created_at DESC
+                    """
+                )
+                columns = [col.name for col in cur.description]
+                db_rows = cur.fetchall()
+
+        result: list[dict] = []
+        for db_row in db_rows:
+            row_dict = dict(zip(columns, db_row))
+            # psycopg2 returns JSONB as Python dict; normalise both fields
+            metadata = row_dict.get("metadata")
+            if isinstance(metadata, str):
+                row_dict["metadata"] = json.loads(metadata)
+            prov_rec = row_dict.get("provider_recommendation")
+            if isinstance(prov_rec, str):
+                row_dict["provider_recommendation"] = json.loads(prov_rec)
+            result.append(row_dict)
+        return result
+
+    return await asyncio.to_thread(_query)
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,9 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
+
+# strategy imports DocumentMetadata does NOT, so this is a one-way dependency — no cycle.
+from app.models.strategy import PipelineRecommendation, ProviderRecommendation
 
 
 class DocumentMetadata(BaseModel):
@@ -45,6 +50,19 @@ class UploadResponse(BaseModel):
 
     doc_id: str = Field(..., description="Server-generated identifier for the uploaded document")
     metadata: DocumentMetadata
+
+
+class HistoryItem(BaseModel):
+    doc_id: str
+    filename: str
+    uploaded_at: datetime
+    metadata: DocumentMetadata
+    recommendation: PipelineRecommendation | None = None
+    provider_recommendation: ProviderRecommendation | None = None
+
+
+class HistoryResponse(BaseModel):
+    items: list[HistoryItem]
 
 
 class AzureDIResult(BaseModel):
