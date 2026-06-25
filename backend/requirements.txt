@@ -21,3 +21,6 @@ aiohttp>=3.9
 
 # Azure OpenAI for the /recommend pipeline recommender (optional - lazy-imported)
 openai>=1.40
+
+# PostgreSQL (document store persistence)
+psycopg2-binary>=2.9

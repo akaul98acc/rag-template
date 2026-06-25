@@ -16,6 +16,7 @@ from app.services.content_stats import (
     count_words,
     derive_content_stats,
 )
+from app.services.database import db_get_document, db_register_document
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +27,26 @@ class StoredDocument:
     metadata: DocumentMetadata
 
 
-_DOCS: dict[str, StoredDocument] = {}
+async def register_document(doc_id: str, path: Path, metadata: DocumentMetadata) -> None:
+    """Persist a document record (PostgreSQL when configured, in-memory fallback)."""
+    await db_register_document(
+        doc_id=doc_id,
+        file_path=path,
+        metadata_dict=metadata.model_dump(),
+        filename=metadata.filename,
+    )
 
 
-def register_document(doc_id: str, path: Path, metadata: DocumentMetadata) -> None:
-    _DOCS[doc_id] = StoredDocument(path=path, metadata=metadata)
+async def get_document(doc_id: str) -> StoredDocument | None:
+    """Retrieve a document record by id."""
+    row = await db_get_document(doc_id)
+    if row is None:
+        return None
+    import json
 
-
-def get_document(doc_id: str) -> StoredDocument | None:
-    return _DOCS.get(doc_id)
+    metadata_dict = json.loads(row.metadata_json)
+    metadata = DocumentMetadata(**metadata_dict)
+    return StoredDocument(path=Path(row.file_path), metadata=metadata)
 
 
 async def analyze_file(

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     azure_openai_deployment: str = "gpt-4o-mini"
     azure_openai_api_version: str = "2024-10-21"
 
+    # PostgreSQL document store
+    # Format: postgresql://user:password@host/dbname
+    database_url: str | None = None
+
     # Upload constraints
     max_upload_size_mb: int = 50
 

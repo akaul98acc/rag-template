@@ -56,5 +56,5 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
     # Extract metadata using local libraries
     metadata = extract_metadata_local(dest, file.filename, content)
 
-    register_document(doc_id, dest, metadata)
+    await register_document(doc_id, dest, metadata)
     return UploadResponse(doc_id=doc_id, metadata=metadata)
