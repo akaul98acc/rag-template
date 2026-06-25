@@ -1,6 +1,6 @@
 import { Link, Route, Routes, Navigate } from "react-router-dom";
-import Phase1 from "./pages/Phase1";
-import Phase2 from "./pages/Phase2";
+import Step1 from "./pages/Step1";
+import Step2 from "./pages/Step2";
 import ThemeToggle from "./components/ThemeToggle";
 import { Toaster } from "./components/ui/toaster";
 import { UploadProvider } from "@/contexts/UploadContext";
@@ -13,27 +13,27 @@ export default function App() {
         <h1 className="m-0 text-xl font-semibold">RAG Builder</h1>
         <nav className="flex-1">
           <Link
-            to="/phase1"
-            aria-label="Go to Phase 1 — Strategy"
+            to="/step1"
+            aria-label="Go to Step 1 — Strategy"
             className="mr-6 text-primary font-medium no-underline hover:underline"
           >
-            Phase 1 · Strategy
+            Step 1 · Strategy
           </Link>
           <Link
-            to="/phase2"
-            aria-label="Go to Phase 2 — Compare and Generate"
+            to="/step2"
+            aria-label="Go to Step 2 — Compare and Generate"
             className="mr-6 text-primary font-medium no-underline hover:underline"
           >
-            Phase 2 · Compare & Generate
+            Step 2 · Compare & Generate
           </Link>
         </nav>
         <ThemeToggle />
       </header>
       <main className="max-w-[960px] w-full mx-auto px-8 py-8">
         <Routes>
-          <Route path="/" element={<Navigate to="/phase1" replace />} />
-          <Route path="/phase1" element={<Phase1 />} />
-          <Route path="/phase2" element={<Phase2 />} />
+          <Route path="/" element={<Navigate to="/step1" replace />} />
+          <Route path="/step1" element={<Step1 />} />
+          <Route path="/step2" element={<Step2 />} />
         </Routes>
       </main>
       <Toaster />

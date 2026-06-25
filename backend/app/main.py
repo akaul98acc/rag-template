@@ -42,11 +42,11 @@ app.add_middleware(
 )
 
 app.include_router(upload.router, prefix="/api", tags=["upload"])
-app.include_router(recommend.router, prefix="/api", tags=["phase1"])
-app.include_router(providers.router, prefix="/api", tags=["phase2"])
-app.include_router(generate.router, prefix="/api", tags=["phase2"])
-app.include_router(notebook.router, prefix="/api", tags=["phase2"])
-app.include_router(recommend_providers.router, prefix="/api", tags=["phase2"])
+app.include_router(recommend.router, prefix="/api", tags=["step1"])
+app.include_router(providers.router, prefix="/api", tags=["step2"])
+app.include_router(generate.router, prefix="/api", tags=["step2"])
+app.include_router(notebook.router, prefix="/api", tags=["step2"])
+app.include_router(recommend_providers.router, prefix="/api", tags=["step2"])
 
 
 @app.get("/api/health")

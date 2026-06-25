@@ -22,5 +22,8 @@ async def recommend(req: RecommendRequest) -> PipelineRecommendation:
     if not meta.filename or not meta.size_bytes or not meta.mime_type:
         raise HTTPException(status_code=422, detail=_UPLOAD_AGAIN)
 
+    if req.document_type:
+        meta = meta.model_copy(update={"doc_type": req.document_type})
+
     return await recommend_pipeline(meta)
 

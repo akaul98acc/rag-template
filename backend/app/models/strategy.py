@@ -33,6 +33,7 @@ class StrategyRecommendation(BaseModel):
 
 class RecommendRequest(BaseModel):
     doc_id: str
+    document_type: str | None = None
 
 
 class PipelineRecommendation(BaseModel):
