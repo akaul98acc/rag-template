@@ -90,7 +90,7 @@ export default function Step2() {
   const [recLoading, setRecLoading] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
 
-  const { uploadResult } = useUpload();
+  const { uploadResult, selectionsCache, saveSelections, restoredItem, clearRestoredItem } = useUpload();
 
   useEffect(() => {
     let cancelled = false;
@@ -149,6 +149,22 @@ export default function Step2() {
     };
   }, [catalog, uploadResult]);
 
+  useEffect(() => {
+    if (!restoredItem) return;
+    if (restoredItem.provider_recommendation) {
+      setProviderRec(restoredItem.provider_recommendation);
+    } else {
+      setProviderRec(null);
+    }
+    const cached = selectionsCache[restoredItem.doc_id];
+    if (cached) {
+      setSelections(cached);
+    } else {
+      setSelections({});
+    }
+    clearRestoredItem();
+  }, [restoredItem]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Get selected providers for comparison
   const selectedProviders = useMemo(() => {
     if (!catalog) return [];
@@ -177,8 +193,12 @@ export default function Step2() {
   }, [catalog, providerRec]);
 
   function select(stage: StageId, providerId: string) {
-    setSelections((prev) => ({ ...prev, [stage]: providerId }));
+    const newSelections = { ...selections, [stage]: providerId };
+    setSelections(newSelections);
     setGenerated(null);
+    if (uploadResult) {
+      saveSelections(uploadResult.doc_id, newSelections);
+    }
   }
 
   async function handleGenerate() {

@@ -2,6 +2,7 @@ import axios from "axios";
 
 import type {
   GenerateResult,
+  HistoryItem,
   NotebookResult,
   PipelineParams,
   PipelineRecommendation,
@@ -81,6 +82,11 @@ export async function generateCode(
     ...(params ? { params } : {}),
   });
   return data;
+}
+
+export async function fetchHistory(): Promise<HistoryItem[]> {
+  const response = await client.get<{ items: HistoryItem[] }>("/history");
+  return response.data.items;
 }
 
 export async function generateNotebook(

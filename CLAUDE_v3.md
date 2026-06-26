@@ -8,7 +8,6 @@ A two-phase tool for designing RAG (Retrieval-Augmented Generation) pipelines. B
 
 - **Phase 1 — Strategy Agent:** user uploads a document; the agent inspects size + metadata and recommends a chunking strategy, embedding model, and search method. The user can tweak the recommendation, then generate Azure-specific Python code.
 - **Phase 2 — Provider Comparator + Code Generator:** user picks a provider for each pipeline stage (storage, document extraction, embedding, vector search). The app shows trade-offs and, on "Generate code", emits a runnable Python code block wired to those choices.
-- **History tab:** displays all past uploads and their Phase 1 + Phase 2 recommendations fetched from PostgreSQL. Clicking a row restores both steps without re-uploading.
 
 ## Stack
 
@@ -16,7 +15,6 @@ A two-phase tool for designing RAG (Retrieval-Augmented Generation) pipelines. B
 - **Backend:** FastAPI (Python 3.11+), Pydantic v2. Lives in `backend/`. All routes are mounted under the `/api` prefix.
 - **Recommendation:** LLM-first (Azure OpenAI GPT-4o-mini), deterministic rules fallback. Both phases use this pattern independently.
 - **Code generation:** Jinja2 templates, one per provider per stage. See `backend/app/templates/`.
-- **Persistence:** PostgreSQL via psycopg2 (`database.py`). In-memory fallback when `DATABASE_URL` is not set.
 
 ## Commands
 
@@ -50,48 +48,32 @@ All frontend HTTP goes through `frontend/src/services/api.ts` (axios client with
 |--------|---------------------------------|---------------------------------------------------------------------------------|
 | POST   | `/api/upload`                   | Multipart upload. Returns `{ doc_id, metadata }`.                               |
 | POST   | `/api/recommend`                | Body `{ doc_id }`. Returns Phase 1 pipeline recommendation.                    |
-| POST   | `/api/recommend-providers`      | Body `{ doc_id }`. Returns Phase 2 provider recommendation + persists it.      |
+| POST   | `/api/recommend-providers`      | Body `{ doc_id }`. Returns Phase 2 provider recommendation.                    |
 | GET    | `/api/providers`                | Returns the catalog: stages × providers with display metadata.                  |
 | POST   | `/api/generate`                 | Body `{ selections, params? }`. Returns rendered Python code.                   |
 | POST   | `/api/generate-notebook`        | Body `{ selections, params? }`. Returns downloadable `.ipynb` notebook.         |
-| GET    | `/api/history`                  | Returns all past uploads + recommendations joined from PostgreSQL.              |
-| POST   | `/api/feedback`                 | Body `{ recommendation_id, outcome, ... }`. Stores user feedback.              |
 | GET    | `/api/health`                   | Liveness check.                                                                  |
 
 **Layering convention (enforced):** routes in `api/routes/` are thin — no business logic. Logic lives in `services/`. All request/response I/O uses Pydantic v2 models from `backend/app/models/`.
 
 ### Cross-phase state: UploadContext
 
-`frontend/src/contexts/UploadContext.tsx` is the shared React context. It holds:
-
-- `uploadResult` / `setUploadResult` — the `UploadResult` (doc_id + metadata) bridged from Phase 1 to Phase 2.
-- `selectionsCache` / `saveSelections(docId, selections)` — session-only map of user's manual Step 2 provider overrides, keyed by `doc_id`.
-- `restoredItem` / `restoreItem(item)` / `clearRestoredItem()` — one-shot signal used by the History tab. `restoreItem` sets both `restoredItem` and `uploadResult`; Step 1 and Step 2 each consume it in a `useEffect` and call `clearRestoredItem()`.
-
-### Database persistence
-
-`backend/app/services/database.py` manages a single psycopg2 connection (thread-safe via `_lock`). Every DB call is wrapped in `asyncio.to_thread`. Tables:
-
-- **`documents`** — one row per upload (`doc_id`, `filename`, `metadata JSONB`, `created_at`).
-- **`recommendations`** — one row per Phase 1 call, FK to `documents`. Includes all recommendation fields plus `provider_recommendation JSONB` (written by `/api/recommend-providers`).
-- **`recommendation_feedback`** — one row per `/api/feedback` call.
-
-`recommendation_store.py` is the write layer for recommendations and feedback; `database.py` owns the connection lifecycle and the document store. Both modules share the same connection via `get_connection()` / `get_lock()`.
-
-When `DATABASE_URL` is not set, the module falls back to in-memory dicts (`_DOCS_FALLBACK`, `_PROVIDER_RECS_FALLBACK`) — the app works without a database but history is lost on restart.
+`frontend/src/contexts/UploadContext.tsx` holds the `UploadResult` (doc_id + metadata) in React context so Phase 2 can auto-trigger provider recommendation without requiring a re-upload. Phase 1 calls `setUploadResult()` after a successful upload; Phase 2 reads `uploadResult` in a `useEffect` to kick off `recommendProviders()`.
 
 ### Phase 1 — document analysis and recommendation
 
 Upload hits `document_analyzer.py`, which orchestrates two extraction paths:
 
 1. **Azure DI** (`azure_document_intelligence.py`) — async, returns page count, language, tables, images, word/char counts. Used when `AZURE_DOCINT_ENDPOINT` is set.
-2. **Local fallback** (`local_metadata.py`) — PyMuPDF + pdfplumber + langdetect. Always available.
+2. **Local fallback** (`local_metadata.py`) — PyMuPDF + pdfplumber + langdetect. Always available. Upload route uses this path directly (Azure DI is optional enhancement).
 
 After extraction, `content_stats.py` derives computed fields: `avg_words_per_page`, `text_density` (high/medium/low), `table_ratio`, `doc_type`, `content_type`, `avg_sentence_length`.
 
 Recommendation goes through `pipeline_recommender.py`:
 1. **LLM pass** — calls Azure OpenAI (GPT-4o-mini), parses JSON response, validates against known vocabularies.
 2. **Rules fallback** — deterministic logic in `strategy_agent.py` (`_tiny`, `_scanned`, `_large`, `_medium` functions, each returning a `RuleHit`). `strategy_agent.py` is the rules engine only; `pipeline_recommender.py` orchestrates LLM-first.
+
+The in-memory document store (`register_document` / `get_document` in `document_analyzer.py`) is the only persistence — documents are lost on process restart.
 
 ### Phase 1 — code generation (Azure-only)
 
@@ -123,20 +105,18 @@ Stages: `storage`, `document_extraction`, `embedding`, `vector_search`. Each sta
 
 ### Phase 2 — provider recommendation
 
-`provider_recommender.py` mirrors the Phase 1 pattern: LLM-first (Azure OpenAI, full catalog description in prompt), rules fallback. Rules default: `azure_di` for scanned/table-heavy docs, `azure_openai` for embedding, `azure_blob` for storage, `azure_ai_search` for large docs. After the route returns the recommendation it is persisted to the `provider_recommendation` JSONB column on the latest `recommendations` row for that `doc_id`.
+`provider_recommender.py` mirrors the Phase 1 pattern: LLM-first (Azure OpenAI, full catalog description in prompt), rules fallback. Rules default: `azure_di` for scanned/table-heavy docs, `azure_openai` for embedding, `azure_blob` for storage, `azure_ai_search` for large docs.
 
 ## Conventions
 
 - **Backend:** Pydantic v2 for all I/O. Thin routes, logic in `services/`. Provider stubs stay import-light.
 - **Frontend:** function components + hooks. API calls only in `services/api.ts`. Shared types in `src/types/api.ts`. UI primitives in `src/components/ui/` (shadcn). Theme via `src/contexts/ThemeContext.tsx`.
 - **Secrets:** never commit. `backend/.env.example` lists required keys; real values go in `backend/.env` (gitignored).
-- **Feature specs** live in `_specs/<feature-slug>.md`. **Implementation plans** live in `_plans/<feature-slug>.md`. Use the `/spec` skill to create a spec and the `/plan` mode to create a plan before implementing non-trivial features.
 
 ## Key env vars (`backend/.env`)
 
 | Variable                      | Purpose                                      |
 |-------------------------------|----------------------------------------------|
-| `DATABASE_URL`                | PostgreSQL connection string. Without it, the app uses in-memory fallbacks. |
 | `AZURE_DOCINT_ENDPOINT`       | Enables Azure DI metadata extraction         |
 | `AZURE_OPENAI_ENDPOINT`       | Enables LLM-based recommendations            |
 | `AZURE_OPENAI_KEY`            | Auth for Azure OpenAI                        |
@@ -149,3 +129,4 @@ If neither Azure service is configured, the app still works — local extraction
 
 - Executing generated pipelines — both phases emit code only.
 - Auth / multi-tenant — single-user local tool.
+- Persisting uploads beyond process lifetime — in-memory document store is intentional.

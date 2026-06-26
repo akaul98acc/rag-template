@@ -1,6 +1,7 @@
 import { Link, Route, Routes, Navigate } from "react-router-dom";
 import Step1 from "./pages/Step1";
 import Step2 from "./pages/Step2";
+import History from "./pages/History";
 import ThemeToggle from "./components/ThemeToggle";
 import { Toaster } from "./components/ui/toaster";
 import { UploadProvider } from "@/contexts/UploadContext";
@@ -26,6 +27,13 @@ export default function App() {
           >
             Step 2 · Compare & Generate
           </Link>
+          <Link
+            to="/history"
+            aria-label="Go to History"
+            className="mr-6 text-primary font-medium no-underline hover:underline"
+          >
+            History
+          </Link>
         </nav>
         <ThemeToggle />
       </header>
@@ -34,6 +42,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/step1" replace />} />
           <Route path="/step1" element={<Step1 />} />
           <Route path="/step2" element={<Step2 />} />
+          <Route path="/history" element={<History />} />
         </Routes>
       </main>
       <Toaster />

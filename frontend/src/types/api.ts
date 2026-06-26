@@ -96,3 +96,12 @@ export interface ProviderRecommendation {
 }
 
 export type Selections = Partial<Record<StageId, string>>;
+
+export interface HistoryItem {
+  doc_id: string;
+  filename: string;
+  uploaded_at: string;
+  metadata: DocumentMetadata;
+  recommendation: PipelineRecommendation | null;
+  provider_recommendation: ProviderRecommendation | null;
+}

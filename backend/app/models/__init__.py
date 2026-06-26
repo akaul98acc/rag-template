@@ -1,4 +1,4 @@
-from app.models.document import DocumentMetadata, UploadResponse
+from app.models.document import DocumentMetadata, HistoryItem, HistoryResponse, UploadResponse
 from app.models.recommendation import FeedbackRequest, FeedbackResponse, RecommendationRecord
 from app.models.strategy import (
     GenerateRequest,
@@ -15,6 +15,8 @@ from app.models.strategy import (
 __all__ = [
     "DocumentMetadata",
     "FeedbackRequest",
+    "HistoryItem",
+    "HistoryResponse",
     "FeedbackResponse",
     "GenerateRequest",
     "GenerateResponse",
