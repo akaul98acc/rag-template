@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _lock = threading.Lock()
-_conn: Any = None  # psycopg2 connection or None
+_conn: Any = None          # psycopg2 connection or None
+_database_url: str | None = None  # stored on init so reconnect can reuse it
 
 # In-memory fallback — used when DATABASE_URL is not set or DB is unavailable
 _DOCS_FALLBACK: dict[str, "_StoredDocumentRow"] = {}
@@ -125,9 +126,44 @@ def _open_connection(database_url: str) -> Any:
     import psycopg2  # lazy import — only needed when DB is configured
     import psycopg2.extras  # registers UUID / JSON adapters
 
-    conn = psycopg2.connect(database_url)
+    conn = psycopg2.connect(database_url, connect_timeout=10)
     conn.autocommit = True
     return conn
+
+
+def _reconnect_locked() -> None:
+    """Re-open a dropped connection. Caller must already hold _lock."""
+    global _conn
+    if _database_url is None:
+        raise RuntimeError("Cannot reconnect: DATABASE_URL was never set")
+    try:
+        if _conn is not None:
+            try:
+                _conn.close()
+            except Exception:
+                pass
+            _conn = None
+        conn = _open_connection(_database_url)
+        _ensure_schema(conn)
+        _conn = conn
+        logger.info("PostgreSQL connection re-established")
+    except Exception as exc:
+        _conn = None
+        logger.error("PostgreSQL reconnect failed: %s", exc)
+        raise
+
+
+def _run(fn: "Any") -> "Any":
+    """Run fn() under _lock; on a stale-connection error reconnect once and retry."""
+    import psycopg2
+
+    with _lock:
+        try:
+            return fn()
+        except (psycopg2.InterfaceError, psycopg2.OperationalError) as exc:
+            logger.warning("DB connection lost (%s) — reconnecting…", exc)
+            _reconnect_locked()
+            return fn()
 
 
 def _ensure_schema(conn: Any) -> None:
@@ -164,10 +200,11 @@ async def init_db(database_url: str) -> None:
     global _conn
 
     def _setup() -> None:
-        global _conn
+        global _conn, _database_url
         with _lock:
             if _conn is not None:
                 return
+            _database_url = database_url
             conn = _open_connection(database_url)
             _ensure_schema(conn)
             _conn = conn
@@ -219,22 +256,21 @@ async def db_register_document(
     metadata_json = json.dumps(metadata_dict)
     path_str = str(file_path)
 
-    def _insert() -> None:
-        with _lock:
-            with _conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO documents (doc_id, filename, file_path, metadata)
-                    VALUES (%s, %s, %s, %s::jsonb)
-                    ON CONFLICT (doc_id) DO UPDATE
-                        SET filename  = EXCLUDED.filename,
-                            file_path = EXCLUDED.file_path,
-                            metadata  = EXCLUDED.metadata
-                    """,
-                    (doc_id, filename, path_str, metadata_json),
-                )
+    def _do() -> None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO documents (doc_id, filename, file_path, metadata)
+                VALUES (%s, %s, %s, %s::jsonb)
+                ON CONFLICT (doc_id) DO UPDATE
+                    SET filename  = EXCLUDED.filename,
+                        file_path = EXCLUDED.file_path,
+                        metadata  = EXCLUDED.metadata
+                """,
+                (doc_id, filename, path_str, metadata_json),
+            )
 
-    await asyncio.to_thread(_insert)
+    await asyncio.to_thread(lambda: _run(_do))
 
 
 async def db_get_document(doc_id: str) -> _StoredDocumentRow | None:
@@ -242,19 +278,16 @@ async def db_get_document(doc_id: str) -> _StoredDocumentRow | None:
     if _conn is None:
         return _DOCS_FALLBACK.get(doc_id)
 
-    def _select() -> _StoredDocumentRow | None:
-        with _lock:
-            with _conn.cursor() as cur:
-                cur.execute(
-                    "SELECT doc_id, filename, file_path, metadata FROM documents WHERE doc_id = %s",
-                    (doc_id,),
-                )
-                row = cur.fetchone()
+    def _do() -> _StoredDocumentRow | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                "SELECT doc_id, filename, file_path, metadata FROM documents WHERE doc_id = %s",
+                (doc_id,),
+            )
+            row = cur.fetchone()
         if row is None:
             return None
         doc_id_r, filename_r, file_path_r, metadata_r = row
-        # psycopg2 returns JSONB as a Python dict when psycopg2.extras is
-        # imported; serialise back to a JSON string for a uniform interface.
         if isinstance(metadata_r, dict):
             metadata_json = json.dumps(metadata_r)
         else:
@@ -266,7 +299,7 @@ async def db_get_document(doc_id: str) -> _StoredDocumentRow | None:
             metadata_json=metadata_json,
         )
 
-    return await asyncio.to_thread(_select)
+    return await asyncio.to_thread(lambda: _run(_do))
 
 
 async def db_save_provider_recommendation(doc_id: str, provider_rec_dict: dict) -> None:
@@ -277,24 +310,23 @@ async def db_save_provider_recommendation(doc_id: str, provider_rec_dict: dict) 
 
     provider_rec_json = json.dumps(provider_rec_dict)
 
-    def _update() -> None:
-        with _lock:
-            with _conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE recommendations
-                    SET provider_recommendation = %s::jsonb
-                    WHERE id = (
-                        SELECT id FROM recommendations
-                        WHERE doc_id = %s
-                        ORDER BY created_at DESC
-                        LIMIT 1
-                    )
-                    """,
-                    (provider_rec_json, doc_id),
+    def _do() -> None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE recommendations
+                SET provider_recommendation = %s::jsonb
+                WHERE id = (
+                    SELECT id FROM recommendations
+                    WHERE doc_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
                 )
+                """,
+                (provider_rec_json, doc_id),
+            )
 
-    await asyncio.to_thread(_update)
+    await asyncio.to_thread(lambda: _run(_do))
 
 
 async def db_get_history() -> list[dict]:
@@ -327,44 +359,42 @@ async def db_get_history() -> list[dict]:
         # newest first by insertion order isn't guaranteed, but this is best-effort
         return list(reversed(rows))
 
-    def _query() -> list[dict]:
-        with _lock:
-            with _conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT
-                        d.doc_id,
-                        d.filename,
-                        d.metadata,
-                        d.created_at,
-                        r.id                      AS recommendation_id,
-                        r.chunking_strategy,
-                        r.chunk_size,
-                        r.overlap,
-                        r.embedding_model,
-                        r.llm_model,
-                        r.top_k,
-                        r.rationale,
-                        r.confidence,
-                        r.source,
-                        r.provider_recommendation
-                    FROM documents d
-                    LEFT JOIN LATERAL (
-                        SELECT * FROM recommendations
-                        WHERE doc_id = d.doc_id
-                        ORDER BY created_at DESC
-                        LIMIT 1
-                    ) r ON true
-                    ORDER BY d.created_at DESC
-                    """
-                )
-                columns = [col.name for col in cur.description]
-                db_rows = cur.fetchall()
+    def _do() -> list[dict]:
+        with _conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    d.doc_id,
+                    d.filename,
+                    d.metadata,
+                    d.created_at,
+                    r.id                      AS recommendation_id,
+                    r.chunking_strategy,
+                    r.chunk_size,
+                    r.overlap,
+                    r.embedding_model,
+                    r.llm_model,
+                    r.top_k,
+                    r.rationale,
+                    r.confidence,
+                    r.source,
+                    r.provider_recommendation
+                FROM documents d
+                LEFT JOIN LATERAL (
+                    SELECT * FROM recommendations
+                    WHERE doc_id = d.doc_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ) r ON true
+                ORDER BY d.created_at DESC
+                """
+            )
+            columns = [col.name for col in cur.description]
+            db_rows = cur.fetchall()
 
         result: list[dict] = []
         for db_row in db_rows:
             row_dict = dict(zip(columns, db_row))
-            # psycopg2 returns JSONB as Python dict; normalise both fields
             metadata = row_dict.get("metadata")
             if isinstance(metadata, str):
                 row_dict["metadata"] = json.loads(metadata)
@@ -374,7 +404,7 @@ async def db_get_history() -> list[dict]:
             result.append(row_dict)
         return result
 
-    return await asyncio.to_thread(_query)
+    return await asyncio.to_thread(lambda: _run(_do))
 
 
 # ---------------------------------------------------------------------------

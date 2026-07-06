@@ -481,7 +481,7 @@ export default function Step1() {
                   {generatingNotebook ? "Generating..." : "Generate Notebook"}
                 </Button>
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   onClick={() => navigate("/step2")}
                   disabled={!upload}
                   aria-label="Compare providers in Step 2"

@@ -19,9 +19,13 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="RAG Builder", version="0.1.0")
 
 
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    await close_db()
+
+
 @app.on_event("startup")
 async def _startup() -> None:
-    # --- PostgreSQL document store ---
     if settings.database_url:
         try:
             await init_db(settings.database_url)
@@ -51,10 +55,6 @@ async def _startup() -> None:
             "(set azure_docint_endpoint in backend/.env) - uploads use local pypdf fallback"
         )
 
-
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    await close_db()
 
 app.add_middleware(
     CORSMiddleware,
