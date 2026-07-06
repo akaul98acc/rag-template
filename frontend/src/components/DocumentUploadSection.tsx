@@ -84,6 +84,7 @@ function UploadedDocumentInfo({ metadata }: { metadata: DocumentMetadata }) {
         <MetadataItem label="Language" value={metadata.language} />
         {metadata.tables !== undefined && <MetadataItem label="Tables" value={metadata.tables} />}
         {metadata.images !== undefined && <MetadataItem label="Images" value={metadata.images} />}
+        {metadata.is_scanned !== undefined && <MetadataItem label="Scanned" value={metadata.is_scanned ? "Yes" : "No"} />}
       </div>
     </div>
   );
