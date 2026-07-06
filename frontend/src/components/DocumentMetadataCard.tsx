@@ -64,6 +64,11 @@ export default function DocumentMetadataCard({
           value={metadata.images}
           ariaLabel="Number of images detected"
         />
+        <MetadataRow
+          label="Scanned document"
+          value={metadata.is_scanned ? "Yes" : "No"}
+          ariaLabel="Whether document is scanned (image-based)"
+        />
         <div className="flex justify-between py-2 border-b border-border last:border-b-0">
           <span className="text-fg-muted text-sm">
             Estimated cost{" "}
