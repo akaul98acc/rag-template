@@ -18,6 +18,8 @@ async def recommend_providers_route(req: RecommendRequest) -> ProviderRecommenda
     meta = doc.metadata
     if not meta.filename or not meta.size_bytes or not meta.mime_type:
         raise HTTPException(status_code=422, detail=_UPLOAD_AGAIN)
-    rec = await recommend_providers(meta)
-    await db_save_provider_recommendation(req.doc_id, rec.model_dump())
+    rec = await recommend_providers(meta, force_fresh=req.force_fresh)
+    if rec.source != "past_recommendations":
+        rec_id = await db_save_provider_recommendation(req.doc_id, rec.model_dump())
+        rec = rec.model_copy(update={"recommendation_id": rec_id})
     return rec

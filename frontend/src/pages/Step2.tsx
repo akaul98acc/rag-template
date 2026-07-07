@@ -9,7 +9,10 @@ import {
   generateCode,
   generateNotebook,
   recommendProviders,
+  submitFeedback,
+  getFeedback,
 } from "@/services/api";
+import { StarRating } from "@/components/ui/StarRating";
 import { useUpload } from "@/contexts/UploadContext";
 import { toast } from "@/hooks/use-toast";
 import type {
@@ -89,6 +92,8 @@ export default function Step2() {
   const [providerRec, setProviderRec] = useState<ProviderRecommendation | null>(null);
   const [recLoading, setRecLoading] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
+  const [phase2Rating, setPhase2Rating] = useState(0);
+  const [submittingRating, setSubmittingRating] = useState(false);
 
   const { uploadResult, selectionsCache, saveSelections, restoredItem, clearRestoredItem } = useUpload();
 
@@ -150,12 +155,21 @@ export default function Step2() {
   }, [catalog, uploadResult]);
 
   useEffect(() => {
+    const id = providerRec?.recommendation_id;
+    if (!id) return;
+    getFeedback(id, 2)
+      .then((r) => { if (r !== null) setPhase2Rating(r); })
+      .catch(() => {});
+  }, [providerRec?.recommendation_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     if (!restoredItem) return;
     if (restoredItem.provider_recommendation) {
       setProviderRec(restoredItem.provider_recommendation);
     } else {
       setProviderRec(null);
     }
+    setPhase2Rating(0);
     const cached = selectionsCache[restoredItem.doc_id];
     if (cached) {
       setSelections(cached);
@@ -243,6 +257,54 @@ export default function Step2() {
     setProviderRec(null);
     setRecError(null);
     setActiveTab("configure");
+    setPhase2Rating(0);
+  }
+
+  async function handleRegenerate() {
+    if (!uploadResult) return;
+    setRecLoading(true);
+    setRecError(null);
+    setPhase2Rating(0);
+    try {
+      const rec = await recommendProviders(uploadResult.doc_id, true);
+      setProviderRec(rec);
+      setSelections({
+        storage: rec.storage,
+        document_extraction: rec.document_extraction,
+        embedding: rec.embedding,
+        vector_search: rec.vector_search,
+      });
+    } catch (err) {
+      setRecError(err instanceof Error ? err.message : "Could not get provider recommendations");
+    } finally {
+      setRecLoading(false);
+    }
+  }
+
+  async function handlePhase2Rating(rating: number) {
+    if (!providerRec?.recommendation_id) return;
+    const prev = phase2Rating;
+    setPhase2Rating(rating);
+    setSubmittingRating(true);
+    try {
+      await submitFeedback({
+        recommendation_id: providerRec.recommendation_id,
+        rating,
+        phase: 2,
+        final_values: {
+          storage: selections.storage,
+          document_extraction: selections.document_extraction,
+          embedding: selections.embedding,
+          vector_search: selections.vector_search,
+        },
+      });
+      toast({ title: "Thanks for your feedback!" });
+    } catch {
+      setPhase2Rating(prev);
+      toast({ variant: "destructive", title: "Could not save rating — please try again." });
+    } finally {
+      setSubmittingRating(false);
+    }
   }
 
   if (catalogLoading) {
@@ -362,10 +424,54 @@ export default function Step2() {
           })}
 
           {providerRec && (
-            <div className="mb-4 p-4 bg-hover-soft rounded-lg">
-              <p className="text-sm text-fg-muted italic m-0">
-                {providerRec.rationale}
-              </p>
+            <div className="mb-4 rounded-lg border border-border bg-surface">
+              {providerRec.source === "past_recommendations" && (
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border text-sm">
+                  <span className="text-fg-muted">
+                    Using provider selections from a similar document.
+                  </span>
+                  <button
+                    onClick={handleRegenerate}
+                    disabled={recLoading}
+                    className="ml-4 text-sm font-medium text-fg hover:underline disabled:opacity-50"
+                  >
+                    {recLoading ? "Regenerating…" : "Regenerate"}
+                  </button>
+                </div>
+              )}
+              <div className="px-4 pt-3 pb-1 flex gap-6 text-xs text-fg-muted">
+                <span>
+                  Source:{" "}
+                  <span className="font-medium text-fg">
+                    {providerRec.source === "llm"
+                      ? "LLM (Azure OpenAI)"
+                      : providerRec.source === "past_recommendations"
+                      ? "Past Recommendations"
+                      : "Rules engine (fallback)"}
+                  </span>
+                </span>
+                <span>
+                  Confidence:{" "}
+                  <span className="font-medium text-fg">
+                    {Math.round(providerRec.confidence * 100)}%
+                  </span>
+                </span>
+              </div>
+              <div className="px-4 py-3">
+                <p className="text-sm text-fg-muted italic m-0">
+                  {providerRec.rationale}
+                </p>
+              </div>
+              {providerRec.recommendation_id && (
+                <div className="px-4 pb-4 pt-1 border-t border-border mt-1">
+                  <StarRating
+                    value={phase2Rating}
+                    onChange={handlePhase2Rating}
+                    disabled={submittingRating}
+                    label="Rate these provider selections"
+                  />
+                </div>
+              )}
             </div>
           )}
 

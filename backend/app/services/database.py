@@ -100,17 +100,12 @@ CREATE INDEX IF NOT EXISTS idx_recommendations_doc_id     ON recommendations(doc
 
 _CREATE_RECOMMENDATION_FEEDBACK_SQL = """
 CREATE TABLE IF NOT EXISTS recommendation_feedback (
-    id                       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    recommendation_id        UUID        NOT NULL REFERENCES recommendations(id) ON DELETE CASCADE,
-    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    outcome                  TEXT        NOT NULL CHECK (outcome IN ('accepted', 'modified', 'rejected')),
-    notes                    TEXT,
-    final_chunking_strategy  TEXT,
-    final_chunk_size         INT,
-    final_overlap            INT,
-    final_embedding_model    TEXT,
-    final_llm_model          TEXT,
-    final_top_k              INT,
+    id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    recommendation_id UUID        NOT NULL REFERENCES recommendations(id) ON DELETE CASCADE,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    outcome           TEXT        NOT NULL CHECK (outcome IN ('accepted', 'modified', 'rejected')),
+    notes             TEXT,
+    final_values      JSONB,
     UNIQUE (recommendation_id)
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_recommendation_id ON recommendation_feedback(recommendation_id);
@@ -190,6 +185,42 @@ def _ensure_schema(conn: Any) -> None:
         cur.execute(
             "ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS provider_recommendation JSONB"
         )
+        # Add star-rating columns to feedback table
+        cur.execute(
+            "ALTER TABLE recommendation_feedback ADD COLUMN IF NOT EXISTS "
+            "rating INT CHECK (rating >= 1 AND rating <= 5)"
+        )
+        cur.execute(
+            "ALTER TABLE recommendation_feedback ADD COLUMN IF NOT EXISTS "
+            "phase INT CHECK (phase IN (1, 2))"
+        )
+        # Migrate unique constraint from (recommendation_id) to (recommendation_id, phase)
+        # so Phase 1 and Phase 2 feedback can coexist for the same recommendation row.
+        cur.execute(
+            "ALTER TABLE recommendation_feedback "
+            "DROP CONSTRAINT IF EXISTS recommendation_feedback_recommendation_id_key"
+        )
+        cur.execute(
+            "ALTER TABLE recommendation_feedback "
+            "DROP CONSTRAINT IF EXISTS recommendation_feedback_rec_phase_unique"
+        )
+        cur.execute(
+            "ALTER TABLE recommendation_feedback "
+            "ADD CONSTRAINT recommendation_feedback_rec_phase_unique "
+            "UNIQUE (recommendation_id, phase)"
+        )
+        # Replace individual final_* columns with a single JSONB snapshot column.
+        cur.execute(
+            "ALTER TABLE recommendation_feedback "
+            "ADD COLUMN IF NOT EXISTS final_values JSONB"
+        )
+        for col in (
+            "final_chunking_strategy", "final_chunk_size", "final_overlap",
+            "final_embedding_model", "final_llm_model", "final_top_k",
+        ):
+            cur.execute(
+                f"ALTER TABLE recommendation_feedback DROP COLUMN IF EXISTS {col}"
+            )
 
 
 async def init_db(database_url: str) -> None:
@@ -302,15 +333,18 @@ async def db_get_document(doc_id: str) -> _StoredDocumentRow | None:
     return await asyncio.to_thread(lambda: _run(_do))
 
 
-async def db_save_provider_recommendation(doc_id: str, provider_rec_dict: dict) -> None:
-    """Persist a provider recommendation against the most-recent recommendations row."""
+async def db_save_provider_recommendation(doc_id: str, provider_rec_dict: dict) -> str | None:
+    """Persist a provider recommendation against the most-recent recommendations row.
+
+    Returns the recommendation_id that was updated, or None if no row matched.
+    """
     if _conn is None:
         _PROVIDER_RECS_FALLBACK[doc_id] = provider_rec_dict
-        return
+        return None
 
     provider_rec_json = json.dumps(provider_rec_dict)
 
-    def _do() -> None:
+    def _do() -> str | None:
         with _conn.cursor() as cur:
             cur.execute(
                 """
@@ -322,11 +356,14 @@ async def db_save_provider_recommendation(doc_id: str, provider_rec_dict: dict) 
                     ORDER BY created_at DESC
                     LIMIT 1
                 )
+                RETURNING id
                 """,
                 (provider_rec_json, doc_id),
             )
+            row = cur.fetchone()
+            return str(row[0]) if row else None
 
-    await asyncio.to_thread(lambda: _run(_do))
+    return await asyncio.to_thread(lambda: _run(_do))
 
 
 async def db_get_history() -> list[dict]:

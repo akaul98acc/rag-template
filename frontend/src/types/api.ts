@@ -53,7 +53,8 @@ export interface PipelineRecommendation {
   top_k: number;
   rationale: string;
   confidence: number;
-  source: "llm" | "rules";
+  source: "llm" | "rules" | "past_recommendations";
+  recommendation_id?: string | null;
 }
 
 export interface Provider {
@@ -92,7 +93,16 @@ export interface ProviderRecommendation {
   vector_search: string;
   rationale: string;
   confidence: number;
-  source: "llm" | "rules";
+  source: "llm" | "rules" | "past_recommendations";
+  recommendation_id?: string | null;
+}
+
+export interface FeedbackRequest {
+  recommendation_id: string;
+  rating: number;
+  phase: 1 | 2;
+  outcome?: "accepted" | "modified" | "rejected";
+  final_values?: Record<string, unknown>;
 }
 
 export type Selections = Partial<Record<StageId, string>>;

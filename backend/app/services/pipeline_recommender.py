@@ -16,13 +16,11 @@ import logging
 import uuid
 from typing import Any, get_args
 
-from fastapi import BackgroundTasks
-
 from app.core.config import settings
 from app.models import DocumentMetadata, PipelineRecommendation, RecommendationRecord
 from app.models.strategy import ChunkingStrategy, EmbeddingModel, LLMModel
-from app.services.recommendation_store import save_recommendation
-from app.services.strategy_agent import recommend_strategy
+from app.services.recommendation_store import get_reusable_phase1_recommendation, save_recommendation
+from app.services.strategy_agent import get_size_bucket, recommend_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +52,40 @@ def is_azure_openai_configured() -> bool:
 
 async def recommend_pipeline(
     meta: DocumentMetadata,
-    background_tasks: BackgroundTasks | None = None,
     doc_id: str | None = None,
+    force_fresh: bool = False,
 ) -> PipelineRecommendation:
     """Recommend a pipeline configuration from document metadata.
 
     LLM-first with a deterministic rules fallback. Never raises for an
     LLM-side problem; only programming errors would propagate.
-    Persists every result asynchronously via BackgroundTasks.
+    Persists the recommendation synchronously so feedback can be submitted
+    immediately after the response arrives.
+
+    When force_fresh is False (default), checks history for a highly-rated
+    prior recommendation with a matching document profile before calling the LLM.
     """
+    if not force_fresh and meta.doc_type:
+        size_bucket = get_size_bucket(meta.page_count)
+        reuse = await get_reusable_phase1_recommendation(meta.doc_type, meta.language, size_bucket)
+        if reuse is not None:
+            logger.info(
+                "Reusing Phase 1 recommendation %s for %s (doc_type=%s, size=%s)",
+                reuse["recommendation_id"], meta.filename, meta.doc_type, size_bucket,
+            )
+            return PipelineRecommendation(
+                embedding_model=reuse["embedding_model"],
+                llm_model=reuse["llm_model"],
+                chunking_strategy=reuse["chunking_strategy"],
+                chunk_size=reuse["chunk_size"],
+                overlap=reuse["overlap"],
+                top_k=reuse["top_k"],
+                rationale=reuse.get("rationale") or "Reused from a similar document.",
+                confidence=reuse.get("confidence") or 0.9,
+                source="past_recommendations",
+                recommendation_id=str(reuse["recommendation_id"]),
+            )
+
     rec_id = str(uuid.uuid4())
     raw_llm_response: dict[str, Any] | None = None
     model_version: str
@@ -94,11 +117,7 @@ async def recommend_pipeline(
         model_version = "rules-v1"
 
     record = _build_record(rec_id, doc_id, meta, result, model_version, raw_llm_response)
-    if background_tasks is not None:
-        background_tasks.add_task(_persist_recommendation, record)
-    else:
-        asyncio.create_task(_persist_recommendation(record))
-
+    await _persist_recommendation(record)
     return result.model_copy(update={"recommendation_id": rec_id})
 
 

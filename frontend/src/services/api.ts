@@ -1,6 +1,7 @@
 import axios from "axios";
 
 import type {
+  FeedbackRequest,
   GenerateResult,
   HistoryItem,
   NotebookResult,
@@ -49,23 +50,41 @@ export async function uploadDocument(
  */
 export async function recommendPipeline(
   docId: string,
-  documentType?: string
+  documentType?: string,
+  forceFresh?: boolean
 ): Promise<PipelineRecommendation> {
   const { data } = await client.post<PipelineRecommendation>("/recommend", {
     doc_id: docId,
     ...(documentType ? { document_type: documentType } : {}),
+    ...(forceFresh ? { force_fresh: true } : {}),
   });
   return data;
 }
 
 export async function recommendProviders(
-  docId: string
+  docId: string,
+  forceFresh?: boolean
 ): Promise<ProviderRecommendation> {
   const { data } = await client.post<ProviderRecommendation>(
     "/recommend-providers",
-    { doc_id: docId }
+    { doc_id: docId, ...(forceFresh ? { force_fresh: true } : {}) }
   );
   return data;
+}
+
+export async function submitFeedback(payload: FeedbackRequest): Promise<void> {
+  await client.post("/feedback", payload);
+}
+
+export async function getFeedback(
+  recommendationId: string,
+  phase: 1 | 2
+): Promise<number | null> {
+  const { data } = await client.get<{ rating: number | null }>(
+    `/feedback/${recommendationId}`,
+    { params: { phase } }
+  );
+  return data.rating;
 }
 
 export async function fetchProviders(): Promise<ProviderCatalog> {
