@@ -111,6 +111,15 @@ def _medium(meta: DocumentMetadata) -> RuleHit | None:
 RULES: list[Rule] = [_tiny, _scanned, _large, _doc_type, _medium]
 
 
+def get_size_bucket(page_count: int | None) -> str:
+    """Classify page_count into small / medium / large, matching the _tiny/_large/_medium thresholds."""
+    if page_count is None or page_count < 10:
+        return "small"
+    if page_count > 200:
+        return "large"
+    return "medium"
+
+
 async def recommend_strategy(meta: DocumentMetadata) -> StrategyRecommendation:
     for rule in RULES:
         hit = rule(meta)

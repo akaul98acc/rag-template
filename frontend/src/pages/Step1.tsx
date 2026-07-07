@@ -10,7 +10,8 @@ import CodeViewer from "@/components/CodeViewer";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { recommendPipeline, generateCode, generateNotebook } from "@/services/api";
+import { recommendPipeline, generateCode, generateNotebook, submitFeedback, getFeedback } from "@/services/api";
+import { StarRating } from "@/components/ui/StarRating";
 import { toast } from "@/hooks/use-toast";
 import type {
   PipelineRecommendation,
@@ -111,9 +112,19 @@ export default function Step1() {
   const [generated, setGenerated] = useState<GenerateResult | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generatingNotebook, setGeneratingNotebook] = useState(false);
+  const [phase1Rating, setPhase1Rating] = useState(0);
+  const [submittingRating, setSubmittingRating] = useState(false);
 
   const { setUploadResult, restoredItem, clearRestoredItem } = useUpload();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const id = recommendation?.recommendation_id;
+    if (!id) return;
+    getFeedback(id, 1)
+      .then((r) => { if (r !== null) setPhase1Rating(r); })
+      .catch(() => {});
+  }, [recommendation?.recommendation_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!restoredItem) return;
@@ -178,6 +189,7 @@ export default function Step1() {
     setUploadResult(result);
     setRecommendation(null);
     setGenerated(null);
+    setPhase1Rating(0);
     setAnalyzing(true);
 
     // Auto-infer document size and type from metadata
@@ -326,6 +338,80 @@ export default function Step1() {
     setGenerated(null);
     setConfig(DEFAULT_CONFIG);
     setActiveTab("configure");
+    setPhase1Rating(0);
+  }
+
+  async function handleRegenerate() {
+    if (!upload) return;
+    setAnalyzing(true);
+    setRecommendation(null);
+    setPhase1Rating(0);
+    try {
+      const rec = await recommendPipeline(
+        upload.doc_id,
+        config.documentType || undefined,
+        true
+      );
+      setRecommendation(rec);
+      setConfig((prev) => ({
+        ...prev,
+        embeddingModel: rec.embedding_model,
+        llmModel: rec.llm_model,
+        chunkingStrategy: rec.chunking_strategy,
+        parameters: {
+          ...prev.parameters,
+          chunk_size: rec.chunk_size,
+          chunk_overlap: rec.overlap,
+          top_k: rec.top_k,
+        },
+      }));
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Regeneration failed",
+        description: err instanceof Error ? err.message : "Recommendation failed",
+      });
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  async function handlePhase1Rating(rating: number) {
+    if (!recommendation?.recommendation_id) return;
+    const prev = phase1Rating;
+    setPhase1Rating(rating);
+    setSubmittingRating(true);
+    try {
+      const resolvedEmbedding =
+        config.embeddingModel === "auto"
+          ? recommendation.embedding_model
+          : config.embeddingModel;
+      const resolvedLlm =
+        config.llmModel === "auto" ? recommendation.llm_model : config.llmModel;
+      const resolvedChunking =
+        config.chunkingStrategy === "auto"
+          ? recommendation.chunking_strategy
+          : config.chunkingStrategy;
+      await submitFeedback({
+        recommendation_id: recommendation.recommendation_id,
+        rating,
+        phase: 1,
+        final_values: {
+          chunking_strategy: resolvedChunking,
+          chunk_size: config.parameters.chunk_size ?? 512,
+          overlap: config.parameters.chunk_overlap ?? 64,
+          embedding_model: resolvedEmbedding,
+          llm_model: resolvedLlm,
+          top_k: config.parameters.top_k ?? 5,
+        },
+      });
+      toast({ title: "Thanks for your feedback!" });
+    } catch {
+      setPhase1Rating(prev);
+      toast({ variant: "destructive", title: "Could not save rating — please try again." });
+    } finally {
+      setSubmittingRating(false);
+    }
   }
 
   // Calculate stats for display
@@ -499,6 +585,22 @@ export default function Step1() {
               <h3 className="mt-0 mb-4 text-lg font-semibold">
                 Agent Recommendations
               </h3>
+
+              {recommendation.source === "past_recommendations" && (
+                <div className="flex items-center justify-between mb-4 px-4 py-3 bg-hover-soft border border-border rounded-lg text-sm">
+                  <span className="text-fg-muted">
+                    Using a recommendation from a similar document.
+                  </span>
+                  <button
+                    onClick={handleRegenerate}
+                    disabled={analyzing}
+                    className="ml-4 text-sm font-medium text-fg hover:underline disabled:opacity-50"
+                  >
+                    {analyzing ? "Regenerating…" : "Regenerate"}
+                  </button>
+                </div>
+              )}
+
               <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-3 text-sm">
                 <dt className="text-fg-muted">Embedding model</dt>
                 <dd className="text-fg font-medium">
@@ -522,10 +624,12 @@ export default function Step1() {
                 </dd>
                 <dt className="text-fg-muted">Top-K results</dt>
                 <dd className="text-fg font-medium">{recommendation.top_k}</dd>
-                <dt className="text-fg-muted">Decision source</dt>
+                <dt className="text-fg-muted">Source</dt>
                 <dd className="text-fg font-medium">
                   {recommendation.source === "llm"
                     ? "LLM (Azure OpenAI)"
+                    : recommendation.source === "past_recommendations"
+                    ? "Past Recommendations"
                     : "Rules engine (fallback)"}{" "}
                   ({Math.round(recommendation.confidence * 100)}% confidence)
                 </dd>
@@ -535,6 +639,17 @@ export default function Step1() {
                   {recommendation.rationale}
                 </p>
               </div>
+
+              {recommendation.recommendation_id && (
+                <div className="mt-5 pt-4 border-t border-border">
+                  <StarRating
+                    value={phase1Rating}
+                    onChange={handlePhase1Rating}
+                    disabled={submittingRating}
+                    label="Rate this recommendation"
+                  />
+                </div>
+              )}
             </div>
           )}
         </TabsContent>

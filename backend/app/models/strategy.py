@@ -34,6 +34,7 @@ class StrategyRecommendation(BaseModel):
 class RecommendRequest(BaseModel):
     doc_id: str
     document_type: str | None = None
+    force_fresh: bool = False
 
 
 class PipelineRecommendation(BaseModel):
@@ -52,7 +53,7 @@ class PipelineRecommendation(BaseModel):
     top_k: int
     rationale: str
     confidence: float = Field(ge=0.0, le=1.0)
-    source: Literal["llm", "rules"]
+    source: Literal["llm", "rules", "past_recommendations"]
     recommendation_id: str | None = None
 
 
@@ -95,4 +96,5 @@ class ProviderRecommendation(BaseModel):
     vector_search: str
     rationale: str
     confidence: float = Field(ge=0.0, le=1.0)
-    source: Literal["llm", "rules"]
+    source: Literal["llm", "rules", "past_recommendations"]
+    recommendation_id: str | None = None

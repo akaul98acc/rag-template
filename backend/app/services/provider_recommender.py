@@ -15,6 +15,8 @@ from app.core.config import settings
 from app.models import DocumentMetadata, ProviderRecommendation
 from app.providers import full_catalog, get_provider
 from app.services.pipeline_recommender import is_azure_openai_configured
+from app.services.recommendation_store import get_reusable_phase2_recommendation
+from app.services.strategy_agent import get_size_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +26,38 @@ LLM_TIMEOUT_SECONDS = 20.0
 DEFAULT_CONFIDENCE = 0.6
 
 
-async def recommend_providers(meta: DocumentMetadata) -> ProviderRecommendation:
+async def recommend_providers(
+    meta: DocumentMetadata,
+    force_fresh: bool = False,
+) -> ProviderRecommendation:
     """Recommend a provider for each pipeline stage from document metadata.
 
     LLM-first with a deterministic rules fallback. Never raises for an
     LLM-side problem; only programming errors would propagate.
+
+    When force_fresh is False (default), checks history for a highly-rated
+    prior Phase 2 recommendation with a matching document profile.
     """
+    if not force_fresh and meta.doc_type:
+        size_bucket = get_size_bucket(meta.page_count)
+        reuse = await get_reusable_phase2_recommendation(meta.doc_type, meta.language, size_bucket)
+        if reuse is not None:
+            rec_id, provider_dict = reuse
+            logger.info(
+                "Reusing Phase 2 recommendation %s for %s (doc_type=%s, size=%s)",
+                rec_id, meta.filename, meta.doc_type, size_bucket,
+            )
+            return ProviderRecommendation(
+                storage=provider_dict["storage"],
+                document_extraction=provider_dict["document_extraction"],
+                embedding=provider_dict["embedding"],
+                vector_search=provider_dict["vector_search"],
+                rationale=provider_dict.get("rationale") or "Reused from a similar document.",
+                confidence=provider_dict.get("confidence") or 0.9,
+                source="past_recommendations",
+                recommendation_id=rec_id,
+            )
+
     if is_azure_openai_configured():
         try:
             result = await _llm_recommend(meta)

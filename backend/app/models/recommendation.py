@@ -40,14 +40,11 @@ class RecommendationRecord(BaseModel):
 
 class FeedbackRequest(BaseModel):
     recommendation_id: str = Field(..., description="UUID of the recommendation to give feedback on")
-    outcome: Literal["accepted", "modified", "rejected"]
+    rating: int = Field(..., ge=1, le=5, description="Star rating 1-5")
+    phase: int = Field(..., ge=1, le=2, description="1 = Phase 1 (pipeline strategy), 2 = Phase 2 (providers)")
+    outcome: Literal["accepted", "modified", "rejected"] = "accepted"
     notes: str | None = None
-    final_chunking_strategy: str | None = None
-    final_chunk_size: int | None = None
-    final_overlap: int | None = None
-    final_embedding_model: str | None = None
-    final_llm_model: str | None = None
-    final_top_k: int | None = None
+    final_values: dict | None = None
 
 
 class FeedbackResponse(BaseModel):
