@@ -1,4 +1,11 @@
 from app.models.document import DocumentMetadata, HistoryItem, HistoryResponse, UploadResponse
+from app.models.organization import (
+    OrganizationCreate,
+    OrganizationListResponse,
+    OrganizationResponse,
+    OrganizationUpdate,
+    PlanType,
+)
 from app.models.recommendation import FeedbackRequest, FeedbackResponse, RecommendationRecord
 from app.models.strategy import (
     GenerateRequest,
@@ -15,6 +22,11 @@ from app.models.strategy import (
 __all__ = [
     "DocumentMetadata",
     "FeedbackRequest",
+    "OrganizationCreate",
+    "OrganizationListResponse",
+    "OrganizationResponse",
+    "OrganizationUpdate",
+    "PlanType",
     "HistoryItem",
     "HistoryResponse",
     "FeedbackResponse",
