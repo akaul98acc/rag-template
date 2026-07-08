@@ -115,3 +115,43 @@ export interface HistoryItem {
   recommendation: PipelineRecommendation | null;
   provider_recommendation: ProviderRecommendation | null;
 }
+
+export interface Organization {
+  id: string;
+  name: string;
+  org_code: string;
+  website?: string | null;
+  phone_number?: string | null;
+  contact_person: string;
+  plan_selected: string;
+  created_from?: string | null;
+  created_by: string;
+  created_on: string;
+  updated_on: string;
+  updated_by: string;
+}
+
+export interface OrganizationListResponse {
+  items: Organization[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface OrganizationCreate {
+  name: string;
+  org_code: string;
+  website?: string;
+  phone_number?: string;
+  contact_person: string;
+  plan_selected: string;
+  created_from?: string;
+}
+
+export interface OrganizationUpdate {
+  name: string;
+  website?: string;
+  phone_number?: string;
+  contact_person: string;
+  plan_selected: string;
+}

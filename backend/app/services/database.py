@@ -40,6 +40,9 @@ _DOCS_FALLBACK: dict[str, "_StoredDocumentRow"] = {}
 # In-memory fallback for provider recommendations (keyed by doc_id)
 _PROVIDER_RECS_FALLBACK: dict[str, dict] = {}
 
+# In-memory fallback for organizations (keyed by org id)
+_ORGS_FALLBACK: dict[str, dict] = {}
+
 
 @dataclass
 class _StoredDocumentRow:
@@ -96,6 +99,24 @@ CREATE TABLE IF NOT EXISTS recommendations (
 CREATE INDEX IF NOT EXISTS idx_recommendations_source     ON recommendations(source);
 CREATE INDEX IF NOT EXISTS idx_recommendations_created_at ON recommendations(created_at);
 CREATE INDEX IF NOT EXISTS idx_recommendations_doc_id     ON recommendations(doc_id);
+"""
+
+_CREATE_ORGANIZATIONS_SQL = """
+CREATE TABLE IF NOT EXISTS organizations (
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name           TEXT        NOT NULL,
+    org_code       TEXT        NOT NULL UNIQUE,
+    website        TEXT,
+    phone_number   TEXT,
+    contact_person TEXT        NOT NULL,
+    plan_selected  TEXT        NOT NULL,
+    created_from   TEXT,
+    created_by     TEXT        NOT NULL DEFAULT 'system',
+    created_on     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by     TEXT        NOT NULL DEFAULT 'system',
+    updated_on     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_organizations_org_code ON organizations(org_code);
 """
 
 _CREATE_RECOMMENDATION_FEEDBACK_SQL = """
@@ -221,6 +242,7 @@ def _ensure_schema(conn: Any) -> None:
             cur.execute(
                 f"ALTER TABLE recommendation_feedback DROP COLUMN IF EXISTS {col}"
             )
+        cur.execute(_CREATE_ORGANIZATIONS_SQL)
 
 
 async def init_db(database_url: str) -> None:
@@ -457,3 +479,265 @@ def get_connection() -> Any:
 def get_lock() -> threading.Lock:
     """Return the shared threading lock for serialising psycopg2 calls."""
     return _lock
+
+
+# ---------------------------------------------------------------------------
+# Organization CRUD API
+# ---------------------------------------------------------------------------
+
+
+async def db_list_organizations(
+    page: int = 1,
+    page_size: int = 20,
+    search: str | None = None,
+    plan: str | None = None,
+) -> dict:
+    """Return a paginated list of organizations with optional search and plan filter."""
+    if _conn is None:
+        items = list(_ORGS_FALLBACK.values())
+        if search:
+            term = search.lower()
+            items = [
+                r for r in items
+                if term in r.get("name", "").lower() or term in r.get("org_code", "").lower()
+            ]
+        if plan:
+            items = [r for r in items if r.get("plan_selected") == plan]
+        total = len(items)
+        items = sorted(items, key=lambda r: r.get("created_on", ""), reverse=True)
+        offset = (page - 1) * page_size
+        items = items[offset: offset + page_size]
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    def _do() -> dict:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if search:
+            conditions.append("(name ILIKE %s OR org_code ILIKE %s)")
+            like = f"%{search}%"
+            params.extend([like, like])
+        if plan:
+            conditions.append("plan_selected = %s")
+            params.append(plan)
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        with _conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM organizations {where_clause}", params)
+            total: int = cur.fetchone()[0]
+
+            offset = (page - 1) * page_size
+            cur.execute(
+                f"""
+                SELECT id, name, org_code, website, phone_number, contact_person,
+                       plan_selected, created_from, created_by, created_on,
+                       updated_by, updated_on
+                FROM organizations
+                {where_clause}
+                ORDER BY created_on DESC
+                LIMIT %s OFFSET %s
+                """,
+                params + [page_size, offset],
+            )
+            columns = [col.name for col in cur.description]
+            rows = cur.fetchall()
+
+        items: list[dict] = []
+        for row in rows:
+            row_dict = dict(zip(columns, row))
+            row_dict["id"] = str(row_dict["id"])
+            row_dict["created_on"] = str(row_dict["created_on"])
+            row_dict["updated_on"] = str(row_dict["updated_on"])
+            items.append(row_dict)
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_get_organization(org_id: str) -> dict | None:
+    """Fetch a single organization by id, or None if not found."""
+    if _conn is None:
+        return _ORGS_FALLBACK.get(org_id)
+
+    def _do() -> dict | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, org_code, website, phone_number, contact_person,
+                       plan_selected, created_from, created_by, created_on,
+                       updated_by, updated_on
+                FROM organizations
+                WHERE id = %s
+                """,
+                (org_id,),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        if row is None:
+            return None
+        row_dict = dict(zip(columns, row))
+        row_dict["id"] = str(row_dict["id"])
+        row_dict["created_on"] = str(row_dict["created_on"])
+        row_dict["updated_on"] = str(row_dict["updated_on"])
+        return row_dict
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_check_org_code(org_code: str) -> bool:
+    """Return True if org_code is already taken, False if it is available."""
+    if _conn is None:
+        return any(
+            v["org_code"] == org_code for v in _ORGS_FALLBACK.values()
+        )
+
+    def _do() -> bool:
+        with _conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM organizations WHERE org_code = %s LIMIT 1",
+                (org_code,),
+            )
+            return cur.fetchone() is not None
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_create_organization(data: dict) -> dict:
+    """Insert a new organization row and return the full row dict.
+
+    Raises ``psycopg2.errors.UniqueViolation`` on duplicate org_code.
+    """
+    if _conn is None:
+        import uuid
+        from datetime import datetime, timezone
+
+        # Check for duplicate org_code in fallback store
+        org_code = data["org_code"]
+        for existing_row in _ORGS_FALLBACK.values():
+            if existing_row.get("org_code") == org_code:
+                raise ValueError("org_code already exists")
+
+        org_id = str(uuid.uuid4())
+        now = datetime.now(tz=timezone.utc).isoformat()
+        row: dict = {
+            "id": org_id,
+            "name": data["name"],
+            "org_code": org_code,
+            "website": data.get("website"),
+            "phone_number": data.get("phone_number"),
+            "contact_person": data["contact_person"],
+            "plan_selected": data["plan_selected"],
+            "created_from": data.get("created_from"),
+            "created_by": data.get("created_by", "system"),
+            "created_on": now,
+            "updated_by": "system",
+            "updated_on": now,
+        }
+        _ORGS_FALLBACK[org_id] = row
+        return row
+
+    def _do() -> dict:
+        with _conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO organizations
+                    (name, org_code, website, phone_number, contact_person,
+                     plan_selected, created_from, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, name, org_code, website, phone_number, contact_person,
+                          plan_selected, created_from, created_by, created_on,
+                          updated_by, updated_on
+                """,
+                (
+                    data["name"],
+                    data["org_code"],
+                    data.get("website"),
+                    data.get("phone_number"),
+                    data["contact_person"],
+                    data["plan_selected"],
+                    data.get("created_from"),
+                    data.get("created_by", "system"),
+                ),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        row_dict = dict(zip(columns, row))
+        row_dict["id"] = str(row_dict["id"])
+        row_dict["created_on"] = str(row_dict["created_on"])
+        row_dict["updated_on"] = str(row_dict["updated_on"])
+        return row_dict
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_update_organization(org_id: str, data: dict) -> dict | None:
+    """Update mutable fields on an organization row and return the updated row.
+
+    Returns None if no row matched the given id.
+    """
+    if _conn is None:
+        if org_id not in _ORGS_FALLBACK:
+            return None
+        from datetime import datetime, timezone
+
+        existing = _ORGS_FALLBACK[org_id]
+        existing.update(
+            {
+                "name": data["name"],
+                "website": data.get("website"),
+                "phone_number": data.get("phone_number"),
+                "contact_person": data["contact_person"],
+                "plan_selected": data["plan_selected"],
+                "updated_by": "system",
+                "updated_on": datetime.now(tz=timezone.utc).isoformat(),
+            }
+        )
+        return existing
+
+    def _do() -> dict | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE organizations
+                SET name=%s, website=%s, phone_number=%s, contact_person=%s,
+                    plan_selected=%s, updated_by='system', updated_on=NOW()
+                WHERE id=%s
+                RETURNING id, name, org_code, website, phone_number, contact_person,
+                          plan_selected, created_from, created_by, created_on,
+                          updated_by, updated_on
+                """,
+                (
+                    data["name"],
+                    data.get("website"),
+                    data.get("phone_number"),
+                    data["contact_person"],
+                    data["plan_selected"],
+                    org_id,
+                ),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        if row is None:
+            return None
+        row_dict = dict(zip(columns, row))
+        row_dict["id"] = str(row_dict["id"])
+        row_dict["created_on"] = str(row_dict["created_on"])
+        row_dict["updated_on"] = str(row_dict["updated_on"])
+        return row_dict
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_delete_organization(org_id: str) -> bool:
+    """Delete an organization row by id. Returns True if a row was deleted."""
+    if _conn is None:
+        if org_id in _ORGS_FALLBACK:
+            del _ORGS_FALLBACK[org_id]
+            return True
+        return False
+
+    def _do() -> bool:
+        with _conn.cursor() as cur:
+            cur.execute("DELETE FROM organizations WHERE id=%s", (org_id,))
+            return cur.rowcount > 0
+
+    return await asyncio.to_thread(lambda: _run(_do))

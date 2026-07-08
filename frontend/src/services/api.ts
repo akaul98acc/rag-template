@@ -5,6 +5,10 @@ import type {
   GenerateResult,
   HistoryItem,
   NotebookResult,
+  Organization,
+  OrganizationCreate,
+  OrganizationListResponse,
+  OrganizationUpdate,
   PipelineParams,
   PipelineRecommendation,
   ProviderCatalog,
@@ -106,6 +110,55 @@ export async function generateCode(
 export async function fetchHistory(): Promise<HistoryItem[]> {
   const response = await client.get<{ items: HistoryItem[] }>("/history");
   return response.data.items;
+}
+
+export async function listOrganizations(params?: {
+  page?: number;
+  page_size?: number;
+  search?: string;
+  plan?: string;
+}): Promise<OrganizationListResponse> {
+  const { data } = await client.get<OrganizationListResponse>("/organizations", {
+    params,
+  });
+  return data;
+}
+
+export async function createOrganization(
+  data: OrganizationCreate
+): Promise<Organization> {
+  const { data: org } = await client.post<Organization>("/organizations", data);
+  return org;
+}
+
+export async function getOrganization(id: string): Promise<Organization> {
+  const { data } = await client.get<Organization>(`/organizations/${id}`);
+  return data;
+}
+
+export async function updateOrganization(
+  id: string,
+  data: OrganizationUpdate
+): Promise<Organization> {
+  const { data: org } = await client.put<Organization>(
+    `/organizations/${id}`,
+    data
+  );
+  return org;
+}
+
+export async function deleteOrganization(id: string): Promise<void> {
+  await client.delete(`/organizations/${id}`);
+}
+
+export async function checkOrgCode(
+  orgCode: string
+): Promise<{ available: boolean }> {
+  const { data } = await client.get<{ available: boolean }>(
+    "/organizations/check-org-code",
+    { params: { org_code: orgCode } }
+  );
+  return data;
 }
 
 export async function generateNotebook(

@@ -2,6 +2,7 @@ import { Link, Route, Routes, Navigate } from "react-router-dom";
 import Step1 from "./pages/Step1";
 import Step2 from "./pages/Step2";
 import History from "./pages/History";
+import Organizations from "./pages/Organizations";
 import ThemeToggle from "./components/ThemeToggle";
 import { Toaster } from "./components/ui/toaster";
 import { UploadProvider } from "@/contexts/UploadContext";
@@ -34,6 +35,13 @@ export default function App() {
           >
             History
           </Link>
+          <Link
+            to="/organizations"
+            aria-label="Go to Organizations"
+            className="mr-6 text-primary font-medium no-underline hover:underline"
+          >
+            Organizations
+          </Link>
         </nav>
         <ThemeToggle />
       </header>
@@ -43,6 +51,7 @@ export default function App() {
           <Route path="/step1" element={<Step1 />} />
           <Route path="/step2" element={<Step2 />} />
           <Route path="/history" element={<History />} />
+          <Route path="/organizations" element={<Organizations />} />
         </Routes>
       </main>
       <Toaster />
