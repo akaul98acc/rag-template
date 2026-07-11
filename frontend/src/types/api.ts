@@ -117,7 +117,7 @@ export interface HistoryItem {
 }
 
 export interface Organization {
-  id: string;
+  org_id: string;
   name: string;
   org_code: string;
   website?: string | null;
@@ -154,4 +154,47 @@ export interface OrganizationUpdate {
   phone_number?: string;
   contact_person: string;
   plan_selected: string;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+}
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  phone_number?: string | null;
+  org_id: string | null;
+  org_name?: string | null;
+  role_id: string | null;
+  role_name?: string | null;
+  created_by: string;
+  created_on: string;
+  updated_by: string;
+  updated_on: string;
+  deleted_by?: string | null;
+  deleted_on?: string | null;
+}
+
+export interface UserListResponse {
+  items: User[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface UserCreate {
+  name: string;
+  email: string;
+  phone_number?: string;
+  org_id: string;
+  role_id: string;
+}
+
+export interface UserUpdate {
+  name: string;
+  phone_number?: string;
+  role_id: string;
 }

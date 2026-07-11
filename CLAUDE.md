@@ -9,6 +9,7 @@ A two-phase tool for designing RAG (Retrieval-Augmented Generation) pipelines. B
 - **Phase 1 — Strategy Agent:** user uploads a document; the agent inspects size + metadata and recommends a chunking strategy, embedding model, and search method. The user can tweak the recommendation, then generate Azure-specific Python code.
 - **Phase 2 — Provider Comparator + Code Generator:** user picks a provider for each pipeline stage (storage, document extraction, embedding, vector search). The app shows trade-offs and, on "Generate code", emits a runnable Python code block wired to those choices.
 - **History tab:** displays all past uploads and their Phase 1 + Phase 2 recommendations fetched from PostgreSQL. Clicking a row restores both steps without re-uploading.
+- **Organizations / Users tabs:** full CRUD management of tenant organizations and their users. No auth yet — all actor fields are hardcoded to `"system"`.
 
 ## Stack
 
@@ -46,17 +47,33 @@ npm run typecheck  # tsc --noEmit only
 
 All frontend HTTP goes through `frontend/src/services/api.ts` (axios client with `baseURL: "/api"`). Components never call axios directly. Backend routes live in `backend/app/api/routes/` and are registered in `backend/app/main.py`, each under the `/api` prefix.
 
-| Method | Path (with prefix)              | Purpose                                                                         |
-|--------|---------------------------------|---------------------------------------------------------------------------------|
-| POST   | `/api/upload`                   | Multipart upload. Returns `{ doc_id, metadata }`.                               |
-| POST   | `/api/recommend`                | Body `{ doc_id }`. Returns Phase 1 pipeline recommendation.                    |
-| POST   | `/api/recommend-providers`      | Body `{ doc_id }`. Returns Phase 2 provider recommendation + persists it.      |
-| GET    | `/api/providers`                | Returns the catalog: stages × providers with display metadata.                  |
-| POST   | `/api/generate`                 | Body `{ selections, params? }`. Returns rendered Python code.                   |
-| POST   | `/api/generate-notebook`        | Body `{ selections, params? }`. Returns downloadable `.ipynb` notebook.         |
-| GET    | `/api/history`                  | Returns all past uploads + recommendations joined from PostgreSQL.              |
-| POST   | `/api/feedback`                 | Body `{ recommendation_id, outcome, ... }`. Stores user feedback.              |
-| GET    | `/api/health`                   | Liveness check.                                                                  |
+| Method | Path (with prefix)                        | Purpose                                                                    |
+|--------|-------------------------------------------|----------------------------------------------------------------------------|
+| POST   | `/api/upload`                             | Multipart upload. Returns `{ doc_id, metadata }`.                          |
+| POST   | `/api/recommend`                          | Body `{ doc_id }`. Returns Phase 1 pipeline recommendation.               |
+| POST   | `/api/recommend-providers`                | Body `{ doc_id }`. Returns Phase 2 provider recommendation + persists it. |
+| GET    | `/api/providers`                          | Returns the catalog: stages × providers with display metadata.             |
+| POST   | `/api/generate`                           | Body `{ selections, params? }`. Returns rendered Python code.              |
+| POST   | `/api/generate-notebook`                  | Body `{ selections, params? }`. Returns downloadable `.ipynb` notebook.    |
+| GET    | `/api/history`                            | Returns all past uploads + recommendations joined from PostgreSQL.         |
+| POST   | `/api/feedback`                           | Body `{ recommendation_id, outcome, ... }`. Stores user feedback.         |
+| GET    | `/api/feedback/{recommendation_id}`       | `?phase=1\|2` → `{ rating: int \| null }`. Reads existing feedback.       |
+| GET    | `/api/health`                             | Liveness check.                                                            |
+| GET    | `/api/organizations`                      | Paginated list. Query: `page`, `page_size`, `search`, `plan`.             |
+| POST   | `/api/organizations`                      | Create org. Returns 409 on duplicate `org_code`.                          |
+| GET    | `/api/organizations/check-org-code`       | `?org_code=X` → `{ available: bool }`. Must be declared before `/{id}`.  |
+| GET    | `/api/organizations/{id}`                 | Single org by UUID.                                                        |
+| PUT    | `/api/organizations/{id}`                 | Update mutable fields (`name`, `website`, `phone_number`, `contact_person`, `plan_selected`). |
+| DELETE | `/api/organizations/{id}`                 | Hard delete. Returns 204.                                                  |
+| GET    | `/api/users`                              | Paginated list of non-deleted users. Query: `page`, `page_size`, `search`. |
+| POST   | `/api/users`                              | Create user. Returns 409 on duplicate email.                              |
+| GET    | `/api/users/check-email`                  | `?email=X` → `{ available: bool }`. Must be declared before `/{user_id}`. |
+| GET    | `/api/users/{user_id}`                    | Single non-deleted user by UUID.                                           |
+| PUT    | `/api/users/{user_id}`                    | Update `name`, `phone_number`, `role_id` only. Email and org are immutable after creation. |
+| DELETE | `/api/users/{user_id}`                    | Soft delete (sets `deleted_by`/`deleted_on`). Returns 204.               |
+| GET    | `/api/roles`                              | All roles as `[{ id, name }]`. No pagination. Reference list only.        |
+
+**Route ordering constraint:** `check-org-code` and `check-email` routes must be registered *before* their `/{id}` counterparts in the router file, because FastAPI matches in declaration order. This is already correct in the source but must be preserved when editing routes.
 
 **Layering convention (enforced):** routes in `api/routes/` are thin — no business logic. Logic lives in `services/`. All request/response I/O uses Pydantic v2 models from `backend/app/models/`.
 
@@ -74,11 +91,22 @@ All frontend HTTP goes through `frontend/src/services/api.ts` (axios client with
 
 - **`documents`** — one row per upload (`doc_id`, `filename`, `metadata JSONB`, `created_at`).
 - **`recommendations`** — one row per Phase 1 call, FK to `documents`. Includes all recommendation fields plus `provider_recommendation JSONB` (written by `/api/recommend-providers`).
-- **`recommendation_feedback`** — one row per `/api/feedback` call.
+- **`recommendation_feedback`** — one row per `/api/feedback` call. Unique on `(recommendation_id, phase)`.
+- **`organizations`** — UUID PK (`id`, aliased as `org_id` in all API responses), `org_code TEXT UNIQUE`, `plan_selected`. Hard-deleted via `DELETE`.
+- **`roles`** — UUID PK, `name UNIQUE`. Seeded at startup with `Admin`, `Manager`, `User`, `Viewer`. No create/update/delete endpoints exposed — reference-data only. Same seed in `_ROLES_FALLBACK`.
+- **`users`** — UUID PK, `email UNIQUE`, `org_id UUID FK → organizations`, `role_id UUID FK → roles`, soft-delete columns `deleted_by`/`deleted_on`. All list/get/check operations filter `WHERE deleted_on IS NULL`.
 
-`recommendation_store.py` is the write layer for recommendations and feedback; `database.py` owns the connection lifecycle and the document store. Both modules share the same connection via `get_connection()` / `get_lock()`.
+**Soft vs hard delete:** users are soft-deleted; organizations are hard-deleted. This asymmetry is intentional.
 
-When `DATABASE_URL` is not set, the module falls back to in-memory dicts (`_DOCS_FALLBACK`, `_PROVIDER_RECS_FALLBACK`) — the app works without a database but history is lost on restart.
+**In-memory fallbacks:** `_ORGS_FALLBACK`, `_USERS_FALLBACK`, `_ROLES_FALLBACK` in `database.py` mirror all DB operations when `DATABASE_URL` is unset.
+
+**`_run()` auto-reconnect:** wraps every DB call; on `psycopg2.InterfaceError` / `OperationalError` it reconnects once and retries. This handles Neon/PgBouncer idle-timeout drops transparently.
+
+**`_ensure_schema()` is the only migration mechanism** — no migration tool. It runs idempotent `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on every startup. Column-rename migrations (e.g. `org_id → id` on organizations, `role TEXT → role_id UUID` on users, `org_code TEXT → org_id UUID` on users) are guarded by `information_schema` checks. New columns whose indexes reference them must be added *after* the `ALTER TABLE ... ADD COLUMN` step — not inside the `CREATE TABLE` DDL string — because `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, and a subsequent `CREATE INDEX` in the same string will fail if the column doesn't exist yet.
+
+**User join pattern:** all user queries use a three-way `LEFT JOIN` (users → organizations → roles) via `_USER_SELECT` to denormalize `org_name` and `role_name` into every response.
+
+`recommendation_store.py` is the write layer for recommendations and feedback; `database.py` owns the connection lifecycle and all other entities. Both modules share the same connection via `get_connection()` / `get_lock()`.
 
 ### Phase 1 — document analysis and recommendation
 
@@ -125,6 +153,16 @@ Stages: `storage`, `document_extraction`, `embedding`, `vector_search`. Each sta
 
 `provider_recommender.py` mirrors the Phase 1 pattern: LLM-first (Azure OpenAI, full catalog description in prompt), rules fallback. Rules default: `azure_di` for scanned/table-heavy docs, `azure_openai` for embedding, `azure_blob` for storage, `azure_ai_search` for large docs. After the route returns the recommendation it is persisted to the `provider_recommendation` JSONB column on the latest `recommendations` row for that `doc_id`.
 
+### Organizations and Users pages
+
+Both `Organizations.tsx` and `Users.tsx` share a UI pattern:
+- **Debounced search** (300 ms) that resets `page` to 1 on each keystroke.
+- **`refreshKey` state** — incremented after any mutation to trigger a re-fetch without a full page reload.
+- **Slide-in panel** (`role="dialog"`, `z-index: 50`) for view / edit / create with mode switching.
+- **Delete confirmation modal** (`role="alertdialog"`, `z-index: 60`) stacked above the panel.
+- **Skeleton loading rows** shown during fetch.
+- Email availability (`check-email`) and org-code availability (`check-org-code`) are checked on field blur in create mode only.
+
 ## Conventions
 
 - **Backend:** Pydantic v2 for all I/O. Thin routes, logic in `services/`. Provider stubs stay import-light.
@@ -148,4 +186,4 @@ If neither Azure service is configured, the app still works — local extraction
 ## Out of scope (for now)
 
 - Executing generated pipelines — both phases emit code only.
-- Auth / multi-tenant — single-user local tool.
+- Auth — all `created_by` / `updated_by` / `deleted_by` fields are hardcoded to `"system"`. The Organizations + Users data model is multi-tenant-ready, but there is no login, session, or per-user access control.
