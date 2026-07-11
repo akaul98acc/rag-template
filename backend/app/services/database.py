@@ -43,6 +43,17 @@ _PROVIDER_RECS_FALLBACK: dict[str, dict] = {}
 # In-memory fallback for organizations (keyed by org id)
 _ORGS_FALLBACK: dict[str, dict] = {}
 
+# In-memory fallback for users (keyed by user id)
+_USERS_FALLBACK: dict[str, dict] = {}
+
+# In-memory fallback for roles (seeded with defaults)
+_ROLES_FALLBACK: dict[str, dict] = {
+    "00000001-0000-0000-0000-000000000001": {"id": "00000001-0000-0000-0000-000000000001", "name": "Admin"},
+    "00000001-0000-0000-0000-000000000002": {"id": "00000001-0000-0000-0000-000000000002", "name": "Manager"},
+    "00000001-0000-0000-0000-000000000003": {"id": "00000001-0000-0000-0000-000000000003", "name": "User"},
+    "00000001-0000-0000-0000-000000000004": {"id": "00000001-0000-0000-0000-000000000004", "name": "Viewer"},
+}
+
 
 @dataclass
 class _StoredDocumentRow:
@@ -119,6 +130,31 @@ CREATE TABLE IF NOT EXISTS organizations (
 CREATE INDEX IF NOT EXISTS idx_organizations_org_code ON organizations(org_code);
 """
 
+_CREATE_ROLES_SQL = """
+CREATE TABLE IF NOT EXISTS roles (
+    id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL UNIQUE
+);
+"""
+
+_CREATE_USERS_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         TEXT        NOT NULL,
+    email        TEXT        NOT NULL UNIQUE,
+    phone_number TEXT,
+    org_id       UUID,
+    role_id      UUID,
+    created_by   TEXT        NOT NULL DEFAULT 'system',
+    created_on   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by   TEXT        NOT NULL DEFAULT 'system',
+    updated_on   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_by   TEXT,
+    deleted_on   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+"""
+
 _CREATE_RECOMMENDATION_FEEDBACK_SQL = """
 CREATE TABLE IF NOT EXISTS recommendation_feedback (
     id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -183,15 +219,16 @@ def _run(fn: "Any") -> "Any":
 
 
 def _ensure_schema(conn: Any) -> None:
-    """Run CREATE TABLE IF NOT EXISTS for all tables (synchronous).
+    """Create all tables then run column migrations.
 
-    Includes a one-time migration: if the recommendations table exists with
-    a TEXT primary key (old schema), it is dropped and recreated with UUID.
+    Tables are created first so they always exist even if a migration step
+    below raises (e.g. duplicate-constraint on Neon on repeated startups).
     """
     with conn.cursor() as cur:
-        cur.execute(_CREATE_TABLE_SQL)
+        # ── 1. Create all tables (safe, idempotent) ───────────────────────────
+        cur.execute(_CREATE_TABLE_SQL)  # documents
 
-        # One-time migration: drop old TEXT-id recommendations table if present
+        # One-time migration: drop old TEXT-pk recommendations table if present
         cur.execute(
             "SELECT data_type FROM information_schema.columns "
             "WHERE table_name = 'recommendations' AND column_name = 'id'"
@@ -203,10 +240,27 @@ def _ensure_schema(conn: Any) -> None:
 
         cur.execute(_CREATE_RECOMMENDATIONS_SQL)
         cur.execute(_CREATE_RECOMMENDATION_FEEDBACK_SQL)
+        cur.execute(_CREATE_ORGANIZATIONS_SQL)
+        # Migration: if org table was previously created with 'org_id' PK column
+        # (from a short-lived schema experiment), rename it back to 'id'.
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name='organizations' AND column_name='org_id'"
+        )
+        if cur.fetchone() is not None:
+            try:
+                cur.execute("ALTER TABLE organizations RENAME COLUMN org_id TO id")
+            except Exception:
+                pass  # already renamed or DDL not supported — safe to ignore
+        cur.execute(_CREATE_ROLES_SQL)
+        cur.execute(_CREATE_USERS_SQL)
+
+        # ── 2. Column migrations on recommendations ───────────────────────────
         cur.execute(
             "ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS provider_recommendation JSONB"
         )
-        # Add star-rating columns to feedback table
+
+        # ── 3. Column / constraint migrations on recommendation_feedback ──────
         cur.execute(
             "ALTER TABLE recommendation_feedback ADD COLUMN IF NOT EXISTS "
             "rating INT CHECK (rating >= 1 AND rating <= 5)"
@@ -215,22 +269,6 @@ def _ensure_schema(conn: Any) -> None:
             "ALTER TABLE recommendation_feedback ADD COLUMN IF NOT EXISTS "
             "phase INT CHECK (phase IN (1, 2))"
         )
-        # Migrate unique constraint from (recommendation_id) to (recommendation_id, phase)
-        # so Phase 1 and Phase 2 feedback can coexist for the same recommendation row.
-        cur.execute(
-            "ALTER TABLE recommendation_feedback "
-            "DROP CONSTRAINT IF EXISTS recommendation_feedback_recommendation_id_key"
-        )
-        cur.execute(
-            "ALTER TABLE recommendation_feedback "
-            "DROP CONSTRAINT IF EXISTS recommendation_feedback_rec_phase_unique"
-        )
-        cur.execute(
-            "ALTER TABLE recommendation_feedback "
-            "ADD CONSTRAINT recommendation_feedback_rec_phase_unique "
-            "UNIQUE (recommendation_id, phase)"
-        )
-        # Replace individual final_* columns with a single JSONB snapshot column.
         cur.execute(
             "ALTER TABLE recommendation_feedback "
             "ADD COLUMN IF NOT EXISTS final_values JSONB"
@@ -242,7 +280,64 @@ def _ensure_schema(conn: Any) -> None:
             cur.execute(
                 f"ALTER TABLE recommendation_feedback DROP COLUMN IF EXISTS {col}"
             )
-        cur.execute(_CREATE_ORGANIZATIONS_SQL)
+        # Migrate unique constraint to (recommendation_id, phase).
+        # Wrapped in try/except because ADD CONSTRAINT raises DuplicateObject
+        # on Neon when the constraint already exists from a previous startup.
+        cur.execute(
+            "ALTER TABLE recommendation_feedback "
+            "DROP CONSTRAINT IF EXISTS recommendation_feedback_recommendation_id_key"
+        )
+        cur.execute(
+            "ALTER TABLE recommendation_feedback "
+            "DROP CONSTRAINT IF EXISTS recommendation_feedback_rec_phase_unique"
+        )
+        try:
+            cur.execute(
+                "ALTER TABLE recommendation_feedback "
+                "ADD CONSTRAINT recommendation_feedback_rec_phase_unique "
+                "UNIQUE (recommendation_id, phase)"
+            )
+        except Exception:
+            pass  # already exists — safe to ignore with autocommit
+
+        # ── 4. Seed default roles ─────────────────────────────────────────────
+        cur.execute("SELECT COUNT(*) FROM roles")
+        if cur.fetchone()[0] == 0:
+            for rname in ("Admin", "Manager", "User", "Viewer"):
+                cur.execute(
+                    "INSERT INTO roles (name) VALUES (%s) ON CONFLICT (name) DO NOTHING",
+                    (rname,),
+                )
+
+        # ── 5. Column migrations on users ─────────────────────────────────────
+        # role TEXT (intermediate schema) → role_id UUID
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='users' AND column_name='role'"
+        )
+        if cur.fetchone() is not None:
+            cur.execute("ALTER TABLE users DROP COLUMN role")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role_id UUID")
+
+        # org_code TEXT → org_id UUID
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='users' AND column_name='org_code'"
+        )
+        if cur.fetchone() is not None:
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id UUID")
+            cur.execute(
+                """
+                UPDATE users u SET org_id = o.id
+                FROM organizations o
+                WHERE o.org_code = u.org_code AND u.org_id IS NULL
+                """
+            )
+            cur.execute("ALTER TABLE users DROP COLUMN org_code")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id UUID")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id)"
+        )
 
 
 async def init_db(database_url: str) -> None:
@@ -528,7 +623,7 @@ async def db_list_organizations(
             offset = (page - 1) * page_size
             cur.execute(
                 f"""
-                SELECT id, name, org_code, website, phone_number, contact_person,
+                SELECT id AS org_id, name, org_code, website, phone_number, contact_person,
                        plan_selected, created_from, created_by, created_on,
                        updated_by, updated_on
                 FROM organizations
@@ -544,7 +639,7 @@ async def db_list_organizations(
         items: list[dict] = []
         for row in rows:
             row_dict = dict(zip(columns, row))
-            row_dict["id"] = str(row_dict["id"])
+            row_dict["org_id"] = str(row_dict["org_id"])
             row_dict["created_on"] = str(row_dict["created_on"])
             row_dict["updated_on"] = str(row_dict["updated_on"])
             items.append(row_dict)
@@ -562,7 +657,7 @@ async def db_get_organization(org_id: str) -> dict | None:
         with _conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, name, org_code, website, phone_number, contact_person,
+                SELECT id AS org_id, name, org_code, website, phone_number, contact_person,
                        plan_selected, created_from, created_by, created_on,
                        updated_by, updated_on
                 FROM organizations
@@ -575,7 +670,7 @@ async def db_get_organization(org_id: str) -> dict | None:
         if row is None:
             return None
         row_dict = dict(zip(columns, row))
-        row_dict["id"] = str(row_dict["id"])
+        row_dict["org_id"] = str(row_dict["org_id"])
         row_dict["created_on"] = str(row_dict["created_on"])
         row_dict["updated_on"] = str(row_dict["updated_on"])
         return row_dict
@@ -619,7 +714,7 @@ async def db_create_organization(data: dict) -> dict:
         org_id = str(uuid.uuid4())
         now = datetime.now(tz=timezone.utc).isoformat()
         row: dict = {
-            "id": org_id,
+            "org_id": org_id,
             "name": data["name"],
             "org_code": org_code,
             "website": data.get("website"),
@@ -643,7 +738,7 @@ async def db_create_organization(data: dict) -> dict:
                     (name, org_code, website, phone_number, contact_person,
                      plan_selected, created_from, created_by)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id, name, org_code, website, phone_number, contact_person,
+                RETURNING id AS org_id, name, org_code, website, phone_number, contact_person,
                           plan_selected, created_from, created_by, created_on,
                           updated_by, updated_on
                 """,
@@ -661,7 +756,7 @@ async def db_create_organization(data: dict) -> dict:
             columns = [col.name for col in cur.description]
             row = cur.fetchone()
         row_dict = dict(zip(columns, row))
-        row_dict["id"] = str(row_dict["id"])
+        row_dict["org_id"] = str(row_dict["org_id"])
         row_dict["created_on"] = str(row_dict["created_on"])
         row_dict["updated_on"] = str(row_dict["updated_on"])
         return row_dict
@@ -701,7 +796,7 @@ async def db_update_organization(org_id: str, data: dict) -> dict | None:
                 SET name=%s, website=%s, phone_number=%s, contact_person=%s,
                     plan_selected=%s, updated_by='system', updated_on=NOW()
                 WHERE id=%s
-                RETURNING id, name, org_code, website, phone_number, contact_person,
+                RETURNING id AS org_id, name, org_code, website, phone_number, contact_person,
                           plan_selected, created_from, created_by, created_on,
                           updated_by, updated_on
                 """,
@@ -719,7 +814,7 @@ async def db_update_organization(org_id: str, data: dict) -> dict | None:
         if row is None:
             return None
         row_dict = dict(zip(columns, row))
-        row_dict["id"] = str(row_dict["id"])
+        row_dict["org_id"] = str(row_dict["org_id"])
         row_dict["created_on"] = str(row_dict["created_on"])
         row_dict["updated_on"] = str(row_dict["updated_on"])
         return row_dict
@@ -738,6 +833,305 @@ async def db_delete_organization(org_id: str) -> bool:
     def _do() -> bool:
         with _conn.cursor() as cur:
             cur.execute("DELETE FROM organizations WHERE id=%s", (org_id,))
+            return cur.rowcount > 0
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+# ---------------------------------------------------------------------------
+# User CRUD API
+# ---------------------------------------------------------------------------
+
+_USER_SELECT = """
+    SELECT u.id, u.name, u.email, u.phone_number,
+           u.org_id, o.name AS org_name,
+           u.role_id, r.name AS role_name,
+           u.created_by, u.created_on, u.updated_by, u.updated_on,
+           u.deleted_by, u.deleted_on
+    FROM users u
+    LEFT JOIN organizations o ON o.id = u.org_id
+    LEFT JOIN roles r ON r.id = u.role_id
+"""
+
+
+def _serialize_user_row(row_dict: dict) -> dict:
+    row_dict["id"] = str(row_dict["id"])
+    if row_dict.get("org_id") is not None:
+        row_dict["org_id"] = str(row_dict["org_id"])
+    if row_dict.get("role_id") is not None:
+        row_dict["role_id"] = str(row_dict["role_id"])
+    row_dict["created_on"] = str(row_dict["created_on"])
+    row_dict["updated_on"] = str(row_dict["updated_on"])
+    if row_dict.get("deleted_on") is not None:
+        row_dict["deleted_on"] = str(row_dict["deleted_on"])
+    return row_dict
+
+
+async def db_list_users(
+    page: int = 1,
+    page_size: int = 20,
+    search: str | None = None,
+) -> dict:
+    """Return a paginated list of non-deleted users with optional search."""
+    if _conn is None:
+        items = [r for r in _USERS_FALLBACK.values() if r.get("deleted_on") is None]
+        if search:
+            term = search.lower()
+            items = [
+                r for r in items
+                if term in r.get("name", "").lower() or term in r.get("email", "").lower()
+            ]
+        total = len(items)
+        items = sorted(items, key=lambda r: r.get("created_on", ""), reverse=True)
+        offset = (page - 1) * page_size
+        items = items[offset: offset + page_size]
+        for item in items:
+            org = _ORGS_FALLBACK.get(item.get("org_id", ""), {})
+            role = _ROLES_FALLBACK.get(item.get("role_id", ""), {})
+            item["org_name"] = org.get("name")
+            item["role_name"] = role.get("name")
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    def _do() -> dict:
+        conditions: list[str] = ["u.deleted_on IS NULL"]
+        params: list[Any] = []
+        if search:
+            conditions.append("(u.name ILIKE %s OR u.email ILIKE %s)")
+            like = f"%{search}%"
+            params.extend([like, like])
+        where_clause = "WHERE " + " AND ".join(conditions)
+
+        with _conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM users u {where_clause}", params)
+            total: int = cur.fetchone()[0]
+
+            offset = (page - 1) * page_size
+            cur.execute(
+                f"""
+                {_USER_SELECT}
+                {where_clause}
+                ORDER BY u.created_on DESC
+                LIMIT %s OFFSET %s
+                """,
+                params + [page_size, offset],
+            )
+            columns = [col.name for col in cur.description]
+            rows = cur.fetchall()
+
+        items = [_serialize_user_row(dict(zip(columns, row))) for row in rows]
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_get_user(user_id: str) -> dict | None:
+    """Fetch a single non-deleted user by id, or None if not found."""
+    if _conn is None:
+        row = _USERS_FALLBACK.get(user_id)
+        if row is None or row.get("deleted_on") is not None:
+            return None
+        org = _ORGS_FALLBACK.get(row.get("org_id", ""), {})
+        role = _ROLES_FALLBACK.get(row.get("role_id", ""), {})
+        return {**row, "org_name": org.get("name"), "role_name": role.get("name")}
+
+    def _do() -> dict | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                f"{_USER_SELECT} WHERE u.id = %s AND u.deleted_on IS NULL",
+                (user_id,),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return _serialize_user_row(dict(zip(columns, row)))
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_check_email(email: str) -> bool:
+    """Return True if email is already taken, False if available."""
+    if _conn is None:
+        return any(
+            v["email"].lower() == email.lower()
+            for v in _USERS_FALLBACK.values()
+            if v.get("deleted_on") is None
+        )
+
+    def _do() -> bool:
+        with _conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM users WHERE email = %s AND deleted_on IS NULL LIMIT 1",
+                (email,),
+            )
+            return cur.fetchone() is not None
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_create_user(data: dict) -> dict:
+    """Insert a new user row and return the full row dict.
+
+    Raises ``psycopg2.errors.UniqueViolation`` on duplicate email.
+    """
+    if _conn is None:
+        import uuid
+        from datetime import datetime, timezone
+
+        email = data["email"]
+        for existing in _USERS_FALLBACK.values():
+            if existing.get("email", "").lower() == email.lower() and existing.get("deleted_on") is None:
+                raise ValueError("email already exists")
+
+        user_id = str(uuid.uuid4())
+        now = datetime.now(tz=timezone.utc).isoformat()
+        org = _ORGS_FALLBACK.get(data.get("org_id", ""), {})
+        role = _ROLES_FALLBACK.get(data.get("role_id", ""), {})
+        row: dict = {
+            "id": user_id,
+            "name": data["name"],
+            "email": email,
+            "phone_number": data.get("phone_number"),
+            "org_id": data.get("org_id"),
+            "org_name": org.get("name"),
+            "role_id": data.get("role_id"),
+            "role_name": role.get("name"),
+            "created_by": data.get("created_by", "system"),
+            "created_on": now,
+            "updated_by": "system",
+            "updated_on": now,
+            "deleted_by": None,
+            "deleted_on": None,
+        }
+        _USERS_FALLBACK[user_id] = row
+        return row
+
+    def _do() -> dict:
+        with _conn.cursor() as cur:
+            cur.execute(
+                f"""
+                WITH ins AS (
+                    INSERT INTO users (name, email, phone_number, org_id, role_id, created_by)
+                    VALUES (%s, %s, %s, %s::uuid, %s::uuid, %s)
+                    RETURNING *
+                )
+                SELECT ins.id, ins.name, ins.email, ins.phone_number,
+                       ins.org_id, o.name AS org_name,
+                       ins.role_id, r.name AS role_name,
+                       ins.created_by, ins.created_on, ins.updated_by, ins.updated_on,
+                       ins.deleted_by, ins.deleted_on
+                FROM ins
+                LEFT JOIN organizations o ON o.id = ins.org_id
+                LEFT JOIN roles r ON r.id = ins.role_id
+                """,
+                (
+                    data["name"],
+                    data["email"],
+                    data.get("phone_number"),
+                    data.get("org_id"),
+                    data.get("role_id"),
+                    data.get("created_by", "system"),
+                ),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        return _serialize_user_row(dict(zip(columns, row)))
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_update_user(user_id: str, data: dict) -> dict | None:
+    """Update mutable fields (name, phone_number, role_id) and return updated row.
+
+    Returns None if no active row matched the given id.
+    """
+    if _conn is None:
+        if user_id not in _USERS_FALLBACK or _USERS_FALLBACK[user_id].get("deleted_on") is not None:
+            return None
+        from datetime import datetime, timezone
+
+        existing = _USERS_FALLBACK[user_id]
+        role = _ROLES_FALLBACK.get(data.get("role_id", ""), {})
+        existing.update(
+            {
+                "name": data["name"],
+                "phone_number": data.get("phone_number"),
+                "role_id": data.get("role_id"),
+                "role_name": role.get("name"),
+                "updated_by": "system",
+                "updated_on": datetime.now(tz=timezone.utc).isoformat(),
+            }
+        )
+        return existing
+
+    def _do() -> dict | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH upd AS (
+                    UPDATE users
+                    SET name=%s, phone_number=%s, role_id=%s::uuid,
+                        updated_by='system', updated_on=NOW()
+                    WHERE id=%s AND deleted_on IS NULL
+                    RETURNING *
+                )
+                SELECT upd.id, upd.name, upd.email, upd.phone_number,
+                       upd.org_id, o.name AS org_name,
+                       upd.role_id, r.name AS role_name,
+                       upd.created_by, upd.created_on, upd.updated_by, upd.updated_on,
+                       upd.deleted_by, upd.deleted_on
+                FROM upd
+                LEFT JOIN organizations o ON o.id = upd.org_id
+                LEFT JOIN roles r ON r.id = upd.role_id
+                """,
+                (data["name"], data.get("phone_number"), data.get("role_id"), user_id),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return _serialize_user_row(dict(zip(columns, row)))
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_list_roles() -> list[dict]:
+    """Return all roles ordered by name."""
+    if _conn is None:
+        return sorted(_ROLES_FALLBACK.values(), key=lambda r: r["name"])
+
+    def _do() -> list[dict]:
+        with _conn.cursor() as cur:
+            cur.execute("SELECT id, name FROM roles ORDER BY name")
+            columns = [col.name for col in cur.description]
+            rows = cur.fetchall()
+        result = []
+        for row in rows:
+            row_dict = dict(zip(columns, row))
+            row_dict["id"] = str(row_dict["id"])
+            result.append(row_dict)
+        return result
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_delete_user(user_id: str) -> bool:
+    """Soft-delete a user by setting deleted_by and deleted_on. Returns True if found."""
+    if _conn is None:
+        if user_id not in _USERS_FALLBACK or _USERS_FALLBACK[user_id].get("deleted_on") is not None:
+            return False
+        from datetime import datetime, timezone
+
+        _USERS_FALLBACK[user_id]["deleted_by"] = "system"
+        _USERS_FALLBACK[user_id]["deleted_on"] = datetime.now(tz=timezone.utc).isoformat()
+        return True
+
+    def _do() -> bool:
+        with _conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET deleted_by='system', deleted_on=NOW() WHERE id=%s AND deleted_on IS NULL",
+                (user_id,),
+            )
             return cur.rowcount > 0
 
     return await asyncio.to_thread(lambda: _run(_do))

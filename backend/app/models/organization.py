@@ -31,7 +31,7 @@ class OrganizationUpdate(BaseModel):
 
 
 class OrganizationResponse(BaseModel):
-    id: str
+    org_id: str
     name: str
     org_code: str
     website: str | None

@@ -18,6 +18,7 @@ from app.models.strategy import (
     RecommendRequest,
     StrategyRecommendation,
 )
+from app.models.users import UserCreate, UserListResponse, UserResponse, UserUpdate
 
 __all__ = [
     "DocumentMetadata",
@@ -41,4 +42,8 @@ __all__ = [
     "RecommendationRecord",
     "StrategyRecommendation",
     "UploadResponse",
+    "UserCreate",
+    "UserListResponse",
+    "UserResponse",
+    "UserUpdate",
 ]

@@ -13,8 +13,13 @@ import type {
   PipelineRecommendation,
   ProviderCatalog,
   ProviderRecommendation,
+  Role,
   Selections,
   UploadResult,
+  User,
+  UserCreate,
+  UserListResponse,
+  UserUpdate,
 } from "@/types/api";
 
 const client = axios.create({ baseURL: "/api" });
@@ -158,6 +163,49 @@ export async function checkOrgCode(
     "/organizations/check-org-code",
     { params: { org_code: orgCode } }
   );
+  return data;
+}
+
+export async function listUsers(params?: {
+  page?: number;
+  page_size?: number;
+  search?: string;
+}): Promise<UserListResponse> {
+  const { data } = await client.get<UserListResponse>("/users", { params });
+  return data;
+}
+
+export async function createUser(data: UserCreate): Promise<User> {
+  const { data: user } = await client.post<User>("/users", data);
+  return user;
+}
+
+export async function getUser(id: string): Promise<User> {
+  const { data } = await client.get<User>(`/users/${id}`);
+  return data;
+}
+
+export async function updateUser(id: string, data: UserUpdate): Promise<User> {
+  const { data: user } = await client.put<User>(`/users/${id}`, data);
+  return user;
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  await client.delete(`/users/${id}`);
+}
+
+export async function checkEmail(
+  email: string
+): Promise<{ available: boolean }> {
+  const { data } = await client.get<{ available: boolean }>(
+    "/users/check-email",
+    { params: { email } }
+  );
+  return data;
+}
+
+export async function listRoles(): Promise<Role[]> {
+  const { data } = await client.get<Role[]>("/roles");
   return data;
 }
 
