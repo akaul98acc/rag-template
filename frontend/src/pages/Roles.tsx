@@ -10,22 +10,22 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  listUsers,
-  createUser,
-  updateUser,
-  deleteUser,
-  checkEmail,
-  listOrganizations,
   listRoles,
+  createRole,
+  updateRole,
+  deleteRole,
+  checkRoleName,
 } from "@/services/api";
 import { toast } from "@/hooks/use-toast";
-import type { User, UserCreate, UserUpdate, Organization, Role } from "@/types/api";
+import type { Role, RoleCreate, RoleUpdate } from "@/types/api";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const PAGE_SIZE = 20;
+
+const SEEDED_NAMES = new Set(["Admin", "Manager", "User", "Viewer"]);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,34 +50,20 @@ function hasStatus(err: unknown, status: number): boolean {
   );
 }
 
-function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-// ---------------------------------------------------------------------------
-// FormState
-// ---------------------------------------------------------------------------
-
-interface FormState {
-  name: string;
-  email: string;
-  phone_number: string;
-  org_id: string;
-  role_id: string;
-}
-
-function emptyForm(): FormState {
-  return { name: "", email: "", phone_number: "", org_id: "", role_id: "" };
-}
-
-function userToForm(user: User): FormState {
-  return {
-    name: user.name,
-    email: user.email,
-    phone_number: user.phone_number ?? "",
-    org_id: user.org_id ?? "",
-    role_id: user.role_id ?? "",
-  };
+function getDetail(err: unknown): string | null {
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "response" in err &&
+    typeof (err as { response: unknown }).response === "object" &&
+    (err as { response: { data?: { detail?: string } } }).response !== null
+  ) {
+    return (
+      (err as { response: { data?: { detail?: string } } }).response.data
+        ?.detail ?? null
+    );
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,25 +87,23 @@ function FieldGroup({ label, error, children }: FieldGroupProps) {
 }
 
 // ---------------------------------------------------------------------------
-// UserPanel
+// RolePanel
 // ---------------------------------------------------------------------------
 
 type Mode = "view" | "edit" | "create";
 
-type ReportError = (field: keyof FormState, msg: string) => void;
-
-interface UserPanelProps {
+interface RolePanelProps {
   mode: Mode;
-  selected: User | null;
+  selected: Role | null;
   saving: boolean;
   onClose: () => void;
-  onSave: (form: FormState, reportError: ReportError) => void;
+  onSave: (name: string, reportError: (msg: string) => void) => void;
   onEdit: () => void;
   onCancelEdit: () => void;
   onDelete: () => void;
 }
 
-function UserPanel({
+function RolePanel({
   mode,
   selected,
   saving,
@@ -128,82 +112,50 @@ function UserPanel({
   onEdit,
   onCancelEdit,
   onDelete,
-}: UserPanelProps) {
-  const [form, setForm] = useState<FormState>(() =>
-    mode === "create" ? emptyForm() : selected ? userToForm(selected) : emptyForm()
+}: RolePanelProps) {
+  const [name, setName] = useState(
+    mode === "create" ? "" : (selected?.name ?? "")
   );
-  const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
-  const [emailChecking, setEmailChecking] = useState(false);
-  const [orgs, setOrgs] = useState<Organization[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
+  const [error, setError] = useState<string | undefined>();
+  const [nameChecking, setNameChecking] = useState(false);
 
   useEffect(() => {
-    setForm(mode === "create" ? emptyForm() : selected ? userToForm(selected) : emptyForm());
-    setErrors({});
+    setName(mode === "create" ? "" : (selected?.name ?? ""));
+    setError(undefined);
   }, [mode, selected]);
 
-  // Fetch organizations and roles once when panel opens (for dropdowns)
-  useEffect(() => {
-    listOrganizations({ page_size: 100 })
-      .then((res) => setOrgs(res.items))
-      .catch(() => {});
-    listRoles({ page_size: 100 })
-      .then((res) => setRoles(res.items))
-      .catch(() => {});
-  }, []);
+  const isReadOnly = mode === "view";
+  const isSeeded = selected ? SEEDED_NAMES.has(selected.name) : false;
 
-  async function handleEmailBlur() {
-    if (mode !== "create" || !form.email.trim() || !isValidEmail(form.email)) return;
-    setEmailChecking(true);
+  async function handleNameBlur() {
+    if (mode !== "create" || !name.trim()) return;
+    setNameChecking(true);
     try {
-      const { available } = await checkEmail(form.email);
-      if (!available) {
-        setErrors((prev) => ({ ...prev, email: "This email is already taken" }));
-      } else {
-        setErrors((prev) => {
-          const next = { ...prev };
-          delete next.email;
-          return next;
-        });
-      }
+      const { available } = await checkRoleName(name.trim());
+      if (!available) setError("Role name already exists");
+      else setError(undefined);
     } catch {
-      // silently ignore — server will validate on submit
+      // silently ignore
     } finally {
-      setEmailChecking(false);
+      setNameChecking(false);
     }
-  }
-
-  function reportError(field: keyof FormState, msg: string) {
-    setErrors((prev) => ({ ...prev, [field]: msg }));
-  }
-
-  function validate(): boolean {
-    const next: Partial<Record<keyof FormState, string>> = {};
-    if (!form.name.trim()) next.name = "Required";
-    if (mode === "create") {
-      if (!form.email.trim()) next.email = "Required";
-      else if (!isValidEmail(form.email)) next.email = "Enter a valid email address";
-      if (!form.org_id) next.org_id = "Required";
-    }
-    if (!form.role_id) next.role_id = "Required";
-    // preserve async email error from blur check
-    if (!next.email && errors.email) next.email = errors.email;
-    setErrors(next);
-    return Object.keys(next).length === 0;
   }
 
   function handleSubmit() {
-    if (!validate()) return;
-    onSave(form, reportError);
+    if (!name.trim()) {
+      setError("Required");
+      return;
+    }
+    if (error) return;
+    onSave(name.trim(), (msg) => setError(msg));
   }
 
-  const isReadOnly = mode === "view";
   const title =
     mode === "create"
-      ? "Add User"
+      ? "Add Role"
       : mode === "edit"
-        ? "Edit User"
-        : (selected?.name ?? "User");
+        ? "Edit Role"
+        : (selected?.name ?? "Role");
 
   return (
     <>
@@ -225,7 +177,18 @@ function UserPanel({
             onClick={onClose}
             aria-label="Close panel"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -233,34 +196,43 @@ function UserPanel({
         </div>
 
         <div className="flex flex-col gap-4 px-6 py-5 flex-1">
-          <FieldGroup label="Name" error={errors.name}>
+          {isSeeded && (
+            <div className="flex items-center gap-2 rounded-md bg-fg-subtle/10 border border-border px-3 py-2 text-sm text-fg-muted">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              Protected system role — cannot be edited or deleted.
+            </div>
+          )}
+
+          <FieldGroup label="Role Name" error={error}>
             {isReadOnly ? (
               <p className="text-sm text-fg py-1">{selected?.name}</p>
             ) : (
-              <Input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Jane Smith"
-              />
-            )}
-          </FieldGroup>
-
-          <FieldGroup label="Email" error={errors.email}>
-            {isReadOnly || mode === "edit" ? (
-              <p className="text-sm text-fg py-1">{selected?.email ?? form.email}</p>
-            ) : (
               <div className="relative">
                 <Input
-                  type="email"
-                  value={form.email}
+                  value={name}
                   onChange={(e) => {
-                    setForm({ ...form, email: e.target.value });
-                    setErrors((prev) => { const n = { ...prev }; delete n.email; return n; });
+                    setName(e.target.value);
+                    setError(undefined);
                   }}
-                  onBlur={handleEmailBlur}
-                  placeholder="jane@example.com"
+                  onBlur={handleNameBlur}
+                  placeholder="e.g. Analyst"
+                  disabled={isSeeded}
                 />
-                {emailChecking && (
+                {nameChecking && (
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-fg-muted">
                     Checking…
                   </span>
@@ -269,78 +241,19 @@ function UserPanel({
             )}
           </FieldGroup>
 
-          <FieldGroup label="Organization" error={errors.org_id}>
-            {isReadOnly || mode === "edit" ? (
-              <p className="text-sm text-fg py-1">
-                {selected?.org_name ?? "—"}
-              </p>
-            ) : (
-              <select
-                value={form.org_id}
-                onChange={(e) => {
-                  setForm({ ...form, org_id: e.target.value });
-                  setErrors((prev) => { const n = { ...prev }; delete n.org_id; return n; });
-                }}
-                className="flex h-9 w-full rounded-md border border-border-strong bg-surface px-3 py-1 text-sm text-fg shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
-              >
-                <option value="">
-                  {orgs.length === 0 ? "No organizations available" : "Select organization…"}
-                </option>
-                {orgs.map((org) => (
-                  <option key={org.org_id} value={org.org_id}>
-                    {org.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </FieldGroup>
-
-          <FieldGroup label="Role" error={errors.role_id}>
-            {isReadOnly ? (
-              <p className="text-sm text-fg py-1">{selected?.role_name ?? "—"}</p>
-            ) : (
-              <select
-                value={form.role_id}
-                onChange={(e) => {
-                  setForm({ ...form, role_id: e.target.value });
-                  setErrors((prev) => { const n = { ...prev }; delete n.role_id; return n; });
-                }}
-                className="flex h-9 w-full rounded-md border border-border-strong bg-surface px-3 py-1 text-sm text-fg shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
-              >
-                <option value="">
-                  {roles.length === 0 ? "No roles available" : "Select role…"}
-                </option>
-                {roles.map((role) => (
-                  <option key={role.id} value={role.id}>
-                    {role.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </FieldGroup>
-
-          <FieldGroup label="Phone Number">
-            {isReadOnly ? (
-              <p className="text-sm text-fg py-1">{selected?.phone_number || "—"}</p>
-            ) : (
-              <Input
-                value={form.phone_number}
-                onChange={(e) => setForm({ ...form, phone_number: e.target.value })}
-                placeholder="+1 555 000 0000"
-                type="tel"
-              />
-            )}
-          </FieldGroup>
-
-          {mode === "view" && selected && (
+          {mode !== "create" && selected && (
             <div className="grid grid-cols-2 gap-4 pt-4 border-t border-border text-sm text-fg-muted">
               <div>
-                <p className="font-medium text-xs uppercase tracking-wide mb-1">Created</p>
+                <p className="font-medium text-xs uppercase tracking-wide mb-1">
+                  Created
+                </p>
                 <p>{formatDate(selected.created_on)}</p>
                 <p className="text-xs truncate">{selected.created_by}</p>
               </div>
               <div>
-                <p className="font-medium text-xs uppercase tracking-wide mb-1">Updated</p>
+                <p className="font-medium text-xs uppercase tracking-wide mb-1">
+                  Updated
+                </p>
                 <p>{formatDate(selected.updated_on)}</p>
                 <p className="text-xs truncate">{selected.updated_by}</p>
               </div>
@@ -350,16 +263,35 @@ function UserPanel({
           <div className="mt-auto pt-4 flex gap-2 border-t border-border">
             {mode === "view" ? (
               <>
-                <Button type="button" onClick={onEdit} className="flex-1">
-                  Edit
-                </Button>
-                <Button type="button" variant="destructive" onClick={onDelete}>
-                  Delete
-                </Button>
+                {!isSeeded && (
+                  <Button type="button" onClick={onEdit} className="flex-1">
+                    Edit
+                  </Button>
+                )}
+                {!isSeeded && (
+                  <Button type="button" variant="destructive" onClick={onDelete}>
+                    Delete
+                  </Button>
+                )}
+                {isSeeded && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={onClose}
+                    className="flex-1"
+                  >
+                    Close
+                  </Button>
+                )}
               </>
             ) : mode === "edit" ? (
               <>
-                <Button type="button" disabled={saving} onClick={handleSubmit} className="flex-1">
+                <Button
+                  type="button"
+                  disabled={saving}
+                  onClick={handleSubmit}
+                  className="flex-1"
+                >
                   {saving ? "Updating…" : "Update"}
                 </Button>
                 <Button type="button" variant="secondary" onClick={onCancelEdit}>
@@ -368,7 +300,12 @@ function UserPanel({
               </>
             ) : (
               <>
-                <Button type="button" disabled={saving} onClick={handleSubmit} className="flex-1">
+                <Button
+                  type="button"
+                  disabled={saving}
+                  onClick={handleSubmit}
+                  className="flex-1"
+                >
                   {saving ? "Saving…" : "Save"}
                 </Button>
                 <Button type="button" variant="secondary" onClick={onClose}>
@@ -388,12 +325,18 @@ function UserPanel({
 // ---------------------------------------------------------------------------
 
 interface DeleteConfirmProps {
-  user: User;
+  role: Role;
+  deleteError: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
-function DeleteConfirm({ user, onConfirm, onCancel }: DeleteConfirmProps) {
+function DeleteConfirm({
+  role,
+  deleteError,
+  onConfirm,
+  onCancel,
+}: DeleteConfirmProps) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
       <div
@@ -407,12 +350,15 @@ function DeleteConfirm({ user, onConfirm, onCancel }: DeleteConfirmProps) {
         className="relative bg-surface border border-border rounded-lg p-6 w-full max-w-sm shadow-xl"
       >
         <h3 id="del-title" className="text-base font-semibold mb-2 m-0">
-          Delete user?
+          Delete role?
         </h3>
-        <p className="text-sm text-fg-muted mb-5">
-          <strong>{user.name}</strong> ({user.email}) will be removed from the
-          system. This action cannot be undone.
+        <p className="text-sm text-fg-muted mb-3">
+          <strong>{role.name}</strong> will be permanently removed from the
+          system.
         </p>
+        {deleteError && (
+          <p className="text-sm text-danger mb-3">{deleteError}</p>
+        )}
         <div className="flex gap-2 justify-end">
           <Button variant="secondary" onClick={onCancel}>
             Cancel
@@ -435,7 +381,7 @@ function SkeletonRows() {
     <>
       {Array.from({ length: 5 }).map((_, i) => (
         <TableRow key={i}>
-          {Array.from({ length: 5 }).map((_, j) => (
+          {Array.from({ length: 4 }).map((_, j) => (
             <TableCell key={j}>
               <div className="h-4 bg-fg-subtle/20 rounded animate-pulse" />
             </TableCell>
@@ -447,23 +393,25 @@ function SkeletonRows() {
 }
 
 // ---------------------------------------------------------------------------
-// Users page
+// Roles page
 // ---------------------------------------------------------------------------
 
-export default function Users() {
-  const [users, setUsers] = useState<User[]>([]);
+export default function Roles() {
+  const [roles, setRoles] = useState<Role[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<User | null>(null);
+  const [selected, setSelected] = useState<Role | null>(null);
   const [mode, setMode] = useState<Mode>("view");
   const [panelOpen, setPanelOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Role | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // Debounce search input — reset to page 1 on change
   useEffect(() => {
     const id = setTimeout(() => {
       setDebouncedSearch(search);
@@ -472,22 +420,23 @@ export default function Users() {
     return () => clearTimeout(id);
   }, [search]);
 
+  // Fetch list
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    listUsers({
+    listRoles({
       page,
       page_size: PAGE_SIZE,
       ...(debouncedSearch ? { search: debouncedSearch } : {}),
     })
       .then((res) => {
         if (cancelled) return;
-        setUsers(res.items);
+        setRoles(res.items);
         setTotal(res.total);
       })
       .catch(() => {
         if (cancelled) return;
-        toast({ variant: "destructive", title: "Failed to load users." });
+        toast({ variant: "destructive", title: "Failed to load roles." });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -507,8 +456,8 @@ export default function Users() {
     setPanelOpen(true);
   }
 
-  function openView(user: User) {
-    setSelected(user);
+  function openView(role: Role) {
+    setSelected(role);
     setMode("view");
     setPanelOpen(true);
   }
@@ -518,37 +467,29 @@ export default function Users() {
   }
 
   async function handleSave(
-    form: FormState,
-    reportError: (field: keyof FormState, msg: string) => void
+    name: string,
+    reportError: (msg: string) => void
   ) {
     setSaving(true);
     try {
       if (mode === "create") {
-        const payload: UserCreate = {
-          name: form.name,
-          email: form.email,
-          org_id: form.org_id,
-          role_id: form.role_id,
-          ...(form.phone_number ? { phone_number: form.phone_number } : {}),
-        };
-        await createUser(payload);
-        toast({ title: "User created." });
+        const payload: RoleCreate = { name };
+        await createRole(payload);
+        toast({ title: "Role created." });
       } else if (mode === "edit" && selected) {
-        const payload: UserUpdate = {
-          name: form.name,
-          role_id: form.role_id,
-          ...(form.phone_number ? { phone_number: form.phone_number } : {}),
-        };
-        await updateUser(selected.id, payload);
-        toast({ title: "User updated." });
+        const payload: RoleUpdate = { name };
+        await updateRole(selected.id, payload);
+        toast({ title: "Role updated." });
       }
       setPanelOpen(false);
       setRefreshKey((k) => k + 1);
     } catch (err: unknown) {
       if (hasStatus(err, 409)) {
-        reportError("email", "This email is already taken");
+        reportError("Role name already exists");
+      } else if (hasStatus(err, 403)) {
+        reportError(getDetail(err) ?? "This role cannot be modified");
       } else {
-        toast({ variant: "destructive", title: "Failed to save user." });
+        toast({ variant: "destructive", title: "Failed to save role." });
       }
     } finally {
       setSaving(false);
@@ -557,29 +498,35 @@ export default function Users() {
 
   async function handleDelete() {
     if (!deleteTarget) return;
+    setDeleteError(null);
     try {
-      await deleteUser(deleteTarget.id);
-      toast({ title: "User deleted." });
+      await deleteRole(deleteTarget.id);
+      toast({ title: "Role deleted." });
       setDeleteTarget(null);
       setPanelOpen(false);
       setRefreshKey((k) => k + 1);
-    } catch {
-      toast({ variant: "destructive", title: "Failed to delete user." });
+    } catch (err: unknown) {
+      if (hasStatus(err, 409) || hasStatus(err, 403)) {
+        setDeleteError(getDetail(err) ?? "Cannot delete this role.");
+      } else {
+        toast({ variant: "destructive", title: "Failed to delete role." });
+        setDeleteTarget(null);
+      }
     }
   }
 
   return (
     <section>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-semibold m-0">Users</h2>
-        <Button onClick={openCreate}>Add User</Button>
+        <h2 className="text-2xl font-semibold m-0">Roles</h2>
+        <Button onClick={openCreate}>Add Role</Button>
       </div>
 
       <div className="flex gap-3 mb-4">
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name or email…"
+          placeholder="Search by role name…"
           className="max-w-xs"
         />
       </div>
@@ -588,45 +535,65 @@ export default function Users() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Organization</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Created</TableHead>
+              <TableHead>Role Name</TableHead>
+              <TableHead>Created By</TableHead>
+              <TableHead>Created On</TableHead>
+              <TableHead>Updated On</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading && <SkeletonRows />}
 
-            {!loading && users.length === 0 && (
+            {!loading && roles.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={4}
                   className="text-center py-12 text-fg-muted"
                 >
-                  No users found. Click <strong>Add User</strong> to create the
+                  No roles found. Click <strong>Add Role</strong> to create the
                   first one.
                 </TableCell>
               </TableRow>
             )}
 
             {!loading &&
-              users.map((user) => (
+              roles.map((role) => (
                 <TableRow
-                  key={user.id}
+                  key={role.id}
                   className="cursor-pointer"
-                  onClick={() => openView(user)}
+                  onClick={() => openView(role)}
                 >
-                  <TableCell className="font-medium">{user.name}</TableCell>
-                  <TableCell className="text-fg-muted">{user.email}</TableCell>
-                  <TableCell className="text-fg-muted">
-                    {user.org_name ?? "—"}
+                  <TableCell className="font-medium">
+                    <span className="flex items-center gap-2">
+                      {role.name}
+                      {SEEDED_NAMES.has(role.name) && (
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="text-fg-muted"
+                          aria-label="Protected role"
+                        >
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                        </svg>
+                      )}
+                    </span>
                   </TableCell>
                   <TableCell className="text-fg-muted">
-                    {user.role_name ?? "—"}
+                    {role.created_by}
                   </TableCell>
                   <TableCell className="text-fg-muted whitespace-nowrap">
-                    {formatDate(user.created_on)}
+                    {formatDate(role.created_on)}
+                  </TableCell>
+                  <TableCell className="text-fg-muted whitespace-nowrap">
+                    {formatDate(role.updated_on)}
                   </TableCell>
                 </TableRow>
               ))}
@@ -664,7 +631,7 @@ export default function Users() {
       </div>
 
       {panelOpen && (
-        <UserPanel
+        <RolePanel
           mode={mode}
           selected={selected}
           saving={saving}
@@ -673,16 +640,23 @@ export default function Users() {
           onEdit={() => setMode("edit")}
           onCancelEdit={() => setMode("view")}
           onDelete={() => {
-            if (selected) setDeleteTarget(selected);
+            if (selected) {
+              setDeleteError(null);
+              setDeleteTarget(selected);
+            }
           }}
         />
       )}
 
       {deleteTarget && (
         <DeleteConfirm
-          user={deleteTarget}
+          role={deleteTarget}
+          deleteError={deleteError}
           onConfirm={handleDelete}
-          onCancel={() => setDeleteTarget(null)}
+          onCancel={() => {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }}
         />
       )}
     </section>

@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -125,6 +125,7 @@ interface OrgPanelProps {
   onClose: () => void;
   onSave: (form: FormState, reportError: ReportError) => void;
   onEdit: () => void;
+  onCancelEdit: () => void;
   onDelete: () => void;
 }
 
@@ -135,6 +136,7 @@ function OrgPanel({
   onClose,
   onSave,
   onEdit,
+  onCancelEdit,
   onDelete,
 }: OrgPanelProps) {
   const [form, setForm] = useState<FormState>(() =>
@@ -185,8 +187,7 @@ function OrgPanel({
     return Object.keys(next).length === 0;
   }
 
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  function handleSubmit() {
     if (!validate()) return;
     onSave(form, reportError);
   }
@@ -226,7 +227,7 @@ function OrgPanel({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-6 py-5 flex-1">
+        <div className="flex flex-col gap-4 px-6 py-5 flex-1">
           <FieldGroup label="Name" error={errors.name}>
             {isReadOnly ? (
               <p className="text-sm text-fg py-1">{selected?.name}</p>
@@ -357,9 +358,18 @@ function OrgPanel({
                   Delete
                 </Button>
               </>
+            ) : mode === "edit" ? (
+              <>
+                <Button type="button" disabled={saving} onClick={handleSubmit} className="flex-1">
+                  {saving ? "Updating…" : "Update"}
+                </Button>
+                <Button type="button" variant="secondary" onClick={onCancelEdit}>
+                  Cancel
+                </Button>
+              </>
             ) : (
               <>
-                <Button type="submit" disabled={saving} className="flex-1">
+                <Button type="button" disabled={saving} onClick={handleSubmit} className="flex-1">
                   {saving ? "Saving…" : "Save"}
                 </Button>
                 <Button type="button" variant="secondary" onClick={onClose}>
@@ -368,7 +378,7 @@ function OrgPanel({
               </>
             )}
           </div>
-        </form>
+        </div>
       </div>
     </>
   );
@@ -702,6 +712,7 @@ export default function Organizations() {
           onClose={closePanel}
           onSave={handleSave}
           onEdit={() => setMode("edit")}
+          onCancelEdit={() => setMode("view")}
           onDelete={() => {
             if (selected) setDeleteTarget(selected);
           }}

@@ -14,6 +14,9 @@ import type {
   ProviderCatalog,
   ProviderRecommendation,
   Role,
+  RoleCreate,
+  RoleListResponse,
+  RoleUpdate,
   Selections,
   UploadResult,
   User,
@@ -204,8 +207,41 @@ export async function checkEmail(
   return data;
 }
 
-export async function listRoles(): Promise<Role[]> {
-  const { data } = await client.get<Role[]>("/roles");
+export async function listRoles(params?: {
+  page?: number;
+  page_size?: number;
+  search?: string;
+}): Promise<RoleListResponse> {
+  const { data } = await client.get<RoleListResponse>("/roles", { params });
+  return data;
+}
+
+export async function getRole(id: string): Promise<Role> {
+  const { data } = await client.get<Role>(`/roles/${id}`);
+  return data;
+}
+
+export async function createRole(data: RoleCreate): Promise<Role> {
+  const { data: role } = await client.post<Role>("/roles", data);
+  return role;
+}
+
+export async function updateRole(id: string, data: RoleUpdate): Promise<Role> {
+  const { data: role } = await client.put<Role>(`/roles/${id}`, data);
+  return role;
+}
+
+export async function deleteRole(id: string): Promise<void> {
+  await client.delete(`/roles/${id}`);
+}
+
+export async function checkRoleName(
+  name: string
+): Promise<{ available: boolean }> {
+  const { data } = await client.get<{ available: boolean }>(
+    "/roles/check-name",
+    { params: { name } }
+  );
   return data;
 }
 

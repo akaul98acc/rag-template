@@ -3,6 +3,7 @@ import Step1 from "./pages/Step1";
 import Step2 from "./pages/Step2";
 import History from "./pages/History";
 import Organizations from "./pages/Organizations";
+import Roles from "./pages/Roles";
 import Users from "./pages/Users";
 import ThemeToggle from "./components/ThemeToggle";
 import { Toaster } from "./components/ui/toaster";
@@ -44,6 +45,13 @@ export default function App() {
             Organizations
           </Link>
           <Link
+            to="/roles"
+            aria-label="Go to Roles"
+            className="mr-6 text-primary font-medium no-underline hover:underline"
+          >
+            Roles
+          </Link>
+          <Link
             to="/users"
             aria-label="Go to Users"
             className="mr-6 text-primary font-medium no-underline hover:underline"
@@ -60,6 +68,7 @@ export default function App() {
           <Route path="/step2" element={<Step2 />} />
           <Route path="/history" element={<History />} />
           <Route path="/organizations" element={<Organizations />} />
+          <Route path="/roles" element={<Roles />} />
           <Route path="/users" element={<Users />} />
         </Routes>
       </main>

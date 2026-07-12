@@ -48,11 +48,33 @@ _USERS_FALLBACK: dict[str, dict] = {}
 
 # In-memory fallback for roles (seeded with defaults)
 _ROLES_FALLBACK: dict[str, dict] = {
-    "00000001-0000-0000-0000-000000000001": {"id": "00000001-0000-0000-0000-000000000001", "name": "Admin"},
-    "00000001-0000-0000-0000-000000000002": {"id": "00000001-0000-0000-0000-000000000002", "name": "Manager"},
-    "00000001-0000-0000-0000-000000000003": {"id": "00000001-0000-0000-0000-000000000003", "name": "User"},
-    "00000001-0000-0000-0000-000000000004": {"id": "00000001-0000-0000-0000-000000000004", "name": "Viewer"},
+    "00000001-0000-0000-0000-000000000001": {
+        "id": "00000001-0000-0000-0000-000000000001", "name": "Admin",
+        "created_by": "system", "created_on": "2024-01-01T00:00:00+00:00",
+        "updated_by": "system", "updated_on": "2024-01-01T00:00:00+00:00",
+        "deleted_by": None, "deleted_on": None,
+    },
+    "00000001-0000-0000-0000-000000000002": {
+        "id": "00000001-0000-0000-0000-000000000002", "name": "Manager",
+        "created_by": "system", "created_on": "2024-01-01T00:00:00+00:00",
+        "updated_by": "system", "updated_on": "2024-01-01T00:00:00+00:00",
+        "deleted_by": None, "deleted_on": None,
+    },
+    "00000001-0000-0000-0000-000000000003": {
+        "id": "00000001-0000-0000-0000-000000000003", "name": "User",
+        "created_by": "system", "created_on": "2024-01-01T00:00:00+00:00",
+        "updated_by": "system", "updated_on": "2024-01-01T00:00:00+00:00",
+        "deleted_by": None, "deleted_on": None,
+    },
+    "00000001-0000-0000-0000-000000000004": {
+        "id": "00000001-0000-0000-0000-000000000004", "name": "Viewer",
+        "created_by": "system", "created_on": "2024-01-01T00:00:00+00:00",
+        "updated_by": "system", "updated_on": "2024-01-01T00:00:00+00:00",
+        "deleted_by": None, "deleted_on": None,
+    },
 }
+
+_SEEDED_ROLE_NAMES: frozenset[str] = frozenset({"Admin", "Manager", "User", "Viewer"})
 
 
 @dataclass
@@ -253,6 +275,16 @@ def _ensure_schema(conn: Any) -> None:
             except Exception:
                 pass  # already renamed or DDL not supported — safe to ignore
         cur.execute(_CREATE_ROLES_SQL)
+        # ── Roles audit column migrations (idempotent) ────────────────────────
+        for _col, _defn in (
+            ("created_by", "TEXT NOT NULL DEFAULT 'system'"),
+            ("created_on", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"),
+            ("updated_by", "TEXT NOT NULL DEFAULT 'system'"),
+            ("updated_on", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"),
+            ("deleted_by", "TEXT"),
+            ("deleted_on", "TIMESTAMPTZ"),
+        ):
+            cur.execute(f"ALTER TABLE roles ADD COLUMN IF NOT EXISTS {_col} {_defn}")
         cur.execute(_CREATE_USERS_SQL)
 
         # ── 2. Column migrations on recommendations ───────────────────────────
@@ -305,7 +337,7 @@ def _ensure_schema(conn: Any) -> None:
         if cur.fetchone()[0] == 0:
             for rname in ("Admin", "Manager", "User", "Viewer"):
                 cur.execute(
-                    "INSERT INTO roles (name) VALUES (%s) ON CONFLICT (name) DO NOTHING",
+                    "INSERT INTO roles (name, created_by, updated_by) VALUES (%s, 'system', 'system') ON CONFLICT (name) DO NOTHING",
                     (rname,),
                 )
 
@@ -1095,22 +1127,219 @@ async def db_update_user(user_id: str, data: dict) -> dict | None:
     return await asyncio.to_thread(lambda: _run(_do))
 
 
-async def db_list_roles() -> list[dict]:
-    """Return all roles ordered by name."""
-    if _conn is None:
-        return sorted(_ROLES_FALLBACK.values(), key=lambda r: r["name"])
+def _serialize_role_row(row_dict: dict) -> dict:
+    row_dict["id"] = str(row_dict["id"])
+    row_dict["created_on"] = str(row_dict["created_on"])
+    row_dict["updated_on"] = str(row_dict["updated_on"])
+    if row_dict.get("deleted_on") is not None:
+        row_dict["deleted_on"] = str(row_dict["deleted_on"])
+    return row_dict
 
-    def _do() -> list[dict]:
+
+_ROLE_SELECT = "SELECT id, name, created_by, created_on, updated_by, updated_on, deleted_by, deleted_on FROM roles"
+
+
+async def db_list_roles(
+    page: int = 1,
+    page_size: int = 20,
+    search: str | None = None,
+) -> dict:
+    """Return a paginated list of non-deleted roles with optional name search."""
+    if _conn is None:
+        items = [r for r in _ROLES_FALLBACK.values() if r.get("deleted_on") is None]
+        if search:
+            term = search.lower()
+            items = [r for r in items if term in r["name"].lower()]
+        total = len(items)
+        items = sorted(items, key=lambda r: r["name"])
+        offset = (page - 1) * page_size
+        items = items[offset: offset + page_size]
+        return {"items": list(items), "total": total, "page": page, "page_size": page_size}
+
+    def _do() -> dict:
+        conditions: list[str] = ["deleted_on IS NULL"]
+        params: list[Any] = []
+        if search:
+            conditions.append("name ILIKE %s")
+            params.append(f"%{search}%")
+        where_clause = "WHERE " + " AND ".join(conditions)
+
         with _conn.cursor() as cur:
-            cur.execute("SELECT id, name FROM roles ORDER BY name")
+            cur.execute(f"SELECT COUNT(*) FROM roles {where_clause}", params)
+            total: int = cur.fetchone()[0]
+
+            offset = (page - 1) * page_size
+            cur.execute(
+                f"{_ROLE_SELECT} {where_clause} ORDER BY name LIMIT %s OFFSET %s",
+                params + [page_size, offset],
+            )
             columns = [col.name for col in cur.description]
             rows = cur.fetchall()
-        result = []
-        for row in rows:
-            row_dict = dict(zip(columns, row))
-            row_dict["id"] = str(row_dict["id"])
-            result.append(row_dict)
-        return result
+
+        result = [_serialize_role_row(dict(zip(columns, row))) for row in rows]
+        return {"items": result, "total": total, "page": page, "page_size": page_size}
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_get_role(role_id: str) -> dict | None:
+    """Fetch a single non-deleted role by id, or None if not found."""
+    if _conn is None:
+        row = _ROLES_FALLBACK.get(role_id)
+        return row if row and row.get("deleted_on") is None else None
+
+    def _do() -> dict | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                f"{_ROLE_SELECT} WHERE id = %s AND deleted_on IS NULL",
+                (role_id,),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return _serialize_role_row(dict(zip(columns, row)))
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_check_role_name(name: str) -> bool:
+    """Return True if name is already taken (including soft-deleted rows)."""
+    if _conn is None:
+        return any(v["name"].lower() == name.lower() for v in _ROLES_FALLBACK.values())
+
+    def _do() -> bool:
+        with _conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM roles WHERE LOWER(name) = LOWER(%s) LIMIT 1",
+                (name,),
+            )
+            return cur.fetchone() is not None
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_create_role(data: dict) -> dict:
+    """Insert a new role and return the full row dict.
+
+    Raises ``psycopg2.errors.UniqueViolation`` on duplicate name.
+    """
+    if _conn is None:
+        import uuid
+        from datetime import datetime, timezone
+
+        name = data["name"]
+        if any(v["name"].lower() == name.lower() for v in _ROLES_FALLBACK.values()):
+            raise ValueError("role name already exists")
+
+        role_id = str(uuid.uuid4())
+        now = datetime.now(tz=timezone.utc).isoformat()
+        row: dict = {
+            "id": role_id, "name": name,
+            "created_by": "system", "created_on": now,
+            "updated_by": "system", "updated_on": now,
+            "deleted_by": None, "deleted_on": None,
+        }
+        _ROLES_FALLBACK[role_id] = row
+        return row
+
+    def _do() -> dict:
+        with _conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO roles (name, created_by, updated_by)
+                VALUES (%s, 'system', 'system')
+                RETURNING {', '.join(['id', 'name', 'created_by', 'created_on', 'updated_by', 'updated_on', 'deleted_by', 'deleted_on'])}
+                """,
+                (data["name"],),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        return _serialize_role_row(dict(zip(columns, row)))
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_update_role(role_id: str, data: dict) -> dict | None:
+    """Update role name. Returns None if not found or already deleted."""
+    if _conn is None:
+        row = _ROLES_FALLBACK.get(role_id)
+        if row is None or row.get("deleted_on") is not None:
+            return None
+        from datetime import datetime, timezone
+
+        row["name"] = data["name"]
+        row["updated_by"] = "system"
+        row["updated_on"] = datetime.now(tz=timezone.utc).isoformat()
+        return row
+
+    def _do() -> dict | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE roles
+                SET name=%s, updated_by='system', updated_on=NOW()
+                WHERE id=%s AND deleted_on IS NULL
+                RETURNING {', '.join(['id', 'name', 'created_by', 'created_on', 'updated_by', 'updated_on', 'deleted_by', 'deleted_on'])}
+                """,
+                (data["name"], role_id),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return _serialize_role_row(dict(zip(columns, row)))
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_count_users_for_role(role_id: str) -> int:
+    """Count active (non-deleted) users assigned to this role."""
+    if _conn is None:
+        return sum(
+            1 for u in _USERS_FALLBACK.values()
+            if u.get("role_id") == role_id and u.get("deleted_on") is None
+        )
+
+    def _do() -> int:
+        with _conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM users WHERE role_id=%s::uuid AND deleted_on IS NULL",
+                (role_id,),
+            )
+            return cur.fetchone()[0]
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_delete_role(role_id: str) -> dict | None:
+    """Soft-delete a role. Returns the updated row or None if not found."""
+    if _conn is None:
+        row = _ROLES_FALLBACK.get(role_id)
+        if row is None or row.get("deleted_on") is not None:
+            return None
+        from datetime import datetime, timezone
+
+        row["deleted_by"] = "system"
+        row["deleted_on"] = datetime.now(tz=timezone.utc).isoformat()
+        return row
+
+    def _do() -> dict | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE roles
+                SET deleted_by='system', deleted_on=NOW()
+                WHERE id=%s AND deleted_on IS NULL
+                RETURNING {', '.join(['id', 'name', 'created_by', 'created_on', 'updated_by', 'updated_on', 'deleted_by', 'deleted_on'])}
+                """,
+                (role_id,),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return _serialize_role_row(dict(zip(columns, row)))
 
     return await asyncio.to_thread(lambda: _run(_do))
 
