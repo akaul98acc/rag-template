@@ -27,13 +27,21 @@ class StoredDocument:
     metadata: DocumentMetadata
 
 
-async def register_document(doc_id: str, path: Path, metadata: DocumentMetadata) -> None:
+async def register_document(
+    doc_id: str,
+    path: Path,
+    metadata: DocumentMetadata,
+    org_id: str | None = None,
+    uploaded_by: str | None = None,
+) -> None:
     """Persist a document record (PostgreSQL when configured, in-memory fallback)."""
     await db_register_document(
         doc_id=doc_id,
         file_path=path,
         metadata_dict=metadata.model_dump(),
         filename=metadata.filename,
+        org_id=org_id,
+        uploaded_by=uploaded_by,
     )
 
 

@@ -86,6 +86,8 @@ class _StoredDocumentRow:
     filename: str
     file_path: str
     metadata_json: str  # JSON-serialised DocumentMetadata
+    org_id: str | None = None
+    uploaded_by: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +392,13 @@ def _ensure_schema(conn: Any) -> None:
             "CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id)"
         )
 
+        # ── 6. Column migrations on documents (org-scoped upload history) ─────
+        cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS org_id UUID")
+        cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS uploaded_by UUID")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_org_id ON documents(org_id)"
+        )
+
 
 async def init_db(database_url: str) -> None:
     """Initialise the connection pool and create the schema.
@@ -440,6 +449,8 @@ async def db_register_document(
     file_path: Path,
     metadata_dict: dict[str, Any],
     filename: str,
+    org_id: str | None = None,
+    uploaded_by: str | None = None,
 ) -> None:
     """Persist a document record to PostgreSQL (or in-memory fallback)."""
     if _conn is None:
@@ -449,6 +460,8 @@ async def db_register_document(
             filename=filename,
             file_path=str(file_path),
             metadata_json=json.dumps(metadata_dict),
+            org_id=org_id,
+            uploaded_by=uploaded_by,
         )
         return
 
@@ -459,14 +472,14 @@ async def db_register_document(
         with _conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO documents (doc_id, filename, file_path, metadata)
-                VALUES (%s, %s, %s, %s::jsonb)
+                INSERT INTO documents (doc_id, filename, file_path, metadata, org_id, uploaded_by)
+                VALUES (%s, %s, %s, %s::jsonb, %s::uuid, %s::uuid)
                 ON CONFLICT (doc_id) DO UPDATE
                     SET filename  = EXCLUDED.filename,
                         file_path = EXCLUDED.file_path,
                         metadata  = EXCLUDED.metadata
                 """,
-                (doc_id, filename, path_str, metadata_json),
+                (doc_id, filename, path_str, metadata_json, org_id, uploaded_by),
             )
 
     await asyncio.to_thread(lambda: _run(_do))
@@ -534,13 +547,28 @@ async def db_save_provider_recommendation(doc_id: str, provider_rec_dict: dict) 
     return await asyncio.to_thread(lambda: _run(_do))
 
 
-async def db_get_history() -> list[dict]:
-    """Return all documents joined with their latest recommendation, newest first."""
+async def db_get_history(
+    org_id: str | None = None,
+    user_id: str | None = None,
+    role: str | None = None,
+) -> list[dict]:
+    """Return documents joined with their latest recommendation, newest first.
+
+    When org_id is provided, results are filtered to that org. Admin-role callers
+    see all documents in the org (with uploaded_by_email); others see only their own.
+    """
+    is_admin = role == "Admin"
+
     if _conn is None:
         from datetime import datetime, timezone
 
         rows: list[dict] = []
         for stored in _DOCS_FALLBACK.values():
+            if org_id is not None:
+                if stored.org_id != org_id:
+                    continue
+                if not is_admin and stored.uploaded_by != user_id:
+                    continue
             metadata = json.loads(stored.metadata_json)
             rows.append(
                 {
@@ -559,41 +587,110 @@ async def db_get_history() -> list[dict]:
                     "confidence": None,
                     "source": None,
                     "provider_recommendation": _PROVIDER_RECS_FALLBACK.get(stored.doc_id),
+                    "uploaded_by_email": None,
                 }
             )
-        # newest first by insertion order isn't guaranteed, but this is best-effort
         return list(reversed(rows))
 
     def _do() -> list[dict]:
         with _conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    d.doc_id,
-                    d.filename,
-                    d.metadata,
-                    d.created_at,
-                    r.id                      AS recommendation_id,
-                    r.chunking_strategy,
-                    r.chunk_size,
-                    r.overlap,
-                    r.embedding_model,
-                    r.llm_model,
-                    r.top_k,
-                    r.rationale,
-                    r.confidence,
-                    r.source,
-                    r.provider_recommendation
-                FROM documents d
-                LEFT JOIN LATERAL (
-                    SELECT * FROM recommendations
-                    WHERE doc_id = d.doc_id
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                ) r ON true
-                ORDER BY d.created_at DESC
-                """
-            )
+            if org_id is None:
+                # No auth context — return everything (backwards compatibility)
+                cur.execute(
+                    """
+                    SELECT
+                        d.doc_id,
+                        d.filename,
+                        d.metadata,
+                        d.created_at,
+                        r.id                      AS recommendation_id,
+                        r.chunking_strategy,
+                        r.chunk_size,
+                        r.overlap,
+                        r.embedding_model,
+                        r.llm_model,
+                        r.top_k,
+                        r.rationale,
+                        r.confidence,
+                        r.source,
+                        r.provider_recommendation,
+                        NULL::text                AS uploaded_by_email
+                    FROM documents d
+                    LEFT JOIN LATERAL (
+                        SELECT * FROM recommendations
+                        WHERE doc_id = d.doc_id
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    ) r ON true
+                    ORDER BY d.created_at DESC
+                    """
+                )
+            elif is_admin:
+                cur.execute(
+                    """
+                    SELECT
+                        d.doc_id,
+                        d.filename,
+                        d.metadata,
+                        d.created_at,
+                        r.id                      AS recommendation_id,
+                        r.chunking_strategy,
+                        r.chunk_size,
+                        r.overlap,
+                        r.embedding_model,
+                        r.llm_model,
+                        r.top_k,
+                        r.rationale,
+                        r.confidence,
+                        r.source,
+                        r.provider_recommendation,
+                        u.email                   AS uploaded_by_email
+                    FROM documents d
+                    LEFT JOIN users u ON d.uploaded_by = u.id
+                    LEFT JOIN LATERAL (
+                        SELECT * FROM recommendations
+                        WHERE doc_id = d.doc_id
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    ) r ON true
+                    WHERE d.org_id = %s::uuid
+                    ORDER BY d.created_at DESC
+                    """,
+                    (org_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT
+                        d.doc_id,
+                        d.filename,
+                        d.metadata,
+                        d.created_at,
+                        r.id                      AS recommendation_id,
+                        r.chunking_strategy,
+                        r.chunk_size,
+                        r.overlap,
+                        r.embedding_model,
+                        r.llm_model,
+                        r.top_k,
+                        r.rationale,
+                        r.confidence,
+                        r.source,
+                        r.provider_recommendation,
+                        NULL::text                AS uploaded_by_email
+                    FROM documents d
+                    LEFT JOIN LATERAL (
+                        SELECT * FROM recommendations
+                        WHERE doc_id = d.doc_id
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    ) r ON true
+                    WHERE d.org_id = %s::uuid AND d.uploaded_by = %s::uuid
+                    ORDER BY d.created_at DESC
+                    """,
+                    (org_id, user_id),
+                )
+
             columns = [col.name for col in cur.description]
             db_rows = cur.fetchall()
 

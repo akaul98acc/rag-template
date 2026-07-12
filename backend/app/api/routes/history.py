@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.api.deps import get_current_user
 from app.models import HistoryItem, HistoryResponse
 from app.models.document import DocumentMetadata
 from app.models.strategy import PipelineRecommendation, ProviderRecommendation
@@ -9,8 +10,11 @@ router = APIRouter()
 
 
 @router.get("/history", response_model=HistoryResponse)
-async def get_history() -> HistoryResponse:
-    rows = await db_get_history()
+async def get_history(current_user: dict = Depends(get_current_user)) -> HistoryResponse:
+    org_id: str | None = current_user.get("org_id")
+    user_id: str | None = current_user.get("user_id")
+    role: str | None = current_user.get("role")
+    rows = await db_get_history(org_id=org_id, user_id=user_id, role=role)
     items = []
     for row in rows:
         rec = None
@@ -46,6 +50,7 @@ async def get_history() -> HistoryResponse:
                 metadata=DocumentMetadata(**row["metadata"]),
                 recommendation=rec,
                 provider_recommendation=prov_rec,
+                uploaded_by_email=row.get("uploaded_by_email"),
             )
         )
     return HistoryResponse(items=items)

@@ -59,6 +59,7 @@ class HistoryItem(BaseModel):
     metadata: DocumentMetadata
     recommendation: PipelineRecommendation | None = None
     provider_recommendation: ProviderRecommendation | None = None
+    uploaded_by_email: str | None = None
 
 
 class HistoryResponse(BaseModel):
