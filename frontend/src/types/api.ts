@@ -114,6 +114,7 @@ export interface HistoryItem {
   metadata: DocumentMetadata;
   recommendation: PipelineRecommendation | null;
   provider_recommendation: ProviderRecommendation | null;
+  uploaded_by_email?: string | null;
 }
 
 export interface Organization {

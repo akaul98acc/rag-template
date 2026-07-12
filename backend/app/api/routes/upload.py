@@ -1,8 +1,9 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
+from app.api.deps import get_current_user
 from app.core.config import settings, SUPPORTED_MIME_TYPES
 from app.models import UploadResponse
 from app.services.document_analyzer import register_document
@@ -12,7 +13,10 @@ router = APIRouter()
 
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload(file: UploadFile = File(...)) -> UploadResponse:
+async def upload(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> UploadResponse:
     """Upload a document and extract metadata.
 
     Validates file size, MIME type, and non-empty content before processing.
@@ -56,5 +60,7 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
     # Extract metadata using local libraries
     metadata = extract_metadata_local(dest, file.filename, content)
 
-    await register_document(doc_id, dest, metadata)
+    org_id: str | None = current_user.get("org_id")
+    user_id: str | None = current_user.get("user_id")
+    await register_document(doc_id, dest, metadata, org_id=org_id, uploaded_by=user_id)
     return UploadResponse(doc_id=doc_id, metadata=metadata)

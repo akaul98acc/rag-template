@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
 import { useUpload } from "@/contexts/UploadContext";
 import { fetchHistory } from "@/services/api";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +30,8 @@ export default function History() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const { claims } = useAuth();
+  const isAdmin = claims?.role === "Admin";
   const { selectionsCache, restoreItem } = useUpload();
   const navigate = useNavigate();
 
@@ -99,6 +102,7 @@ export default function History() {
                 <TableHead>Doc Type</TableHead>
                 <TableHead>Chunking Strategy</TableHead>
                 <TableHead>Phase 2 Providers</TableHead>
+                {isAdmin && <TableHead>Uploaded by</TableHead>}
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -141,6 +145,11 @@ export default function History() {
                       <span className="text-fg-muted">—</span>
                     )}
                   </TableCell>
+                  {isAdmin && (
+                    <TableCell className="text-fg-muted text-sm">
+                      {item.uploaded_by_email ?? "—"}
+                    </TableCell>
+                  )}
                   <TableCell>
                     <Button
                       variant="secondary"
