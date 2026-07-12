@@ -219,3 +219,30 @@ export interface UserUpdate {
   phone_number?: string;
   role_id: string;
 }
+
+// Auth
+export interface LoginRequest {
+  email: string;
+  org_code: string;
+}
+
+export interface VerifyOtpRequest {
+  email: string;
+  org_code: string;
+  otp: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+export interface JwtClaims {
+  user_id: string;
+  email: string;
+  org_id: string;
+  org_code: string;
+  role: string;
+  exp: number;
+}
