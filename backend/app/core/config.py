@@ -51,5 +51,17 @@ class Settings(BaseSettings):
     # Upload constraints
     max_upload_size_mb: int = 50
 
+    # JWT authentication (required — startup enforces presence)
+    jwt_secret: str | None = None
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60
+
+    # OTP settings
+    otp_expire_minutes: int = 10
+
+    # Azure Communication Services (optional — OTP is logged to console when not set)
+    azure_communication_endpoint: str | None = None
+    azure_communication_key: str | None = None
+
 
 settings = Settings()

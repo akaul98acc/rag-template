@@ -18,6 +18,7 @@ import type {
   RoleListResponse,
   RoleUpdate,
   Selections,
+  TokenResponse,
   UploadResult,
   User,
   UserCreate,
@@ -25,7 +26,31 @@ import type {
   UserUpdate,
 } from "@/types/api";
 
+const STORAGE_KEY = "rag-builder.auth.token";
+
 const client = axios.create({ baseURL: "/api" });
+
+client.interceptors.request.use((config) => {
+  const token = localStorage.getItem(STORAGE_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+client.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (
+      err.response?.status === 401 &&
+      !err.config?.url?.startsWith("/auth/")
+    ) {
+      localStorage.removeItem(STORAGE_KEY);
+      window.location.href = "/login";
+    }
+    return Promise.reject(err);
+  }
+);
 
 export type UploadProgressCallback = (progress: number) => void;
 
@@ -262,4 +287,28 @@ export async function generateNotebook(
   a.download = data.filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+export async function loginStep1(
+  email: string,
+  orgCode: string
+): Promise<{ message: string; masked_phone: string }> {
+  const { data } = await client.post("/auth/login", {
+    email,
+    org_code: orgCode,
+  });
+  return data;
+}
+
+export async function verifyOtp(
+  email: string,
+  orgCode: string,
+  otp: string
+): Promise<TokenResponse> {
+  const { data } = await client.post<TokenResponse>("/auth/verify-otp", {
+    email,
+    org_code: orgCode,
+    otp,
+  });
+  return data;
 }

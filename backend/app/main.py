@@ -1,9 +1,10 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import feedback, generate, history, notebook, organizations, providers, recommend, recommend_providers, roles, upload, users
+from app.api.deps import get_current_user
+from app.api.routes import auth, feedback, generate, history, notebook, organizations, providers, recommend, recommend_providers, roles, upload, users
 from app.core.config import settings
 from app.services.azure_document_intelligence import is_azure_di_configured
 from app.services.database import close_db, init_db
@@ -26,6 +27,12 @@ async def _shutdown() -> None:
 
 @app.on_event("startup")
 async def _startup() -> None:
+    if not settings.jwt_secret:
+        raise RuntimeError(
+            "JWT_SECRET environment variable is not set. "
+            "The application cannot start without it."
+        )
+
     if settings.database_url:
         try:
             await init_db(settings.database_url)
@@ -64,17 +71,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(upload.router, prefix="/api", tags=["upload"])
-app.include_router(recommend.router, prefix="/api", tags=["step1"])
-app.include_router(providers.router, prefix="/api", tags=["step2"])
-app.include_router(generate.router, prefix="/api", tags=["step2"])
-app.include_router(notebook.router, prefix="/api", tags=["step2"])
-app.include_router(recommend_providers.router, prefix="/api", tags=["step2"])
-app.include_router(feedback.router, prefix="/api", tags=["feedback"])
-app.include_router(history.router, prefix="/api", tags=["history"])
-app.include_router(organizations.router, prefix="/api", tags=["organizations"])
-app.include_router(roles.router, prefix="/api", tags=["roles"])
-app.include_router(users.router, prefix="/api", tags=["users"])
+# Public routes — no JWT required
+app.include_router(auth.router, prefix="/api", tags=["auth"])
+
+# Protected routes — all require a valid JWT
+_jwt = [Depends(get_current_user)]
+app.include_router(upload.router, prefix="/api", tags=["upload"], dependencies=_jwt)
+app.include_router(recommend.router, prefix="/api", tags=["step1"], dependencies=_jwt)
+app.include_router(providers.router, prefix="/api", tags=["step2"], dependencies=_jwt)
+app.include_router(generate.router, prefix="/api", tags=["step2"], dependencies=_jwt)
+app.include_router(notebook.router, prefix="/api", tags=["step2"], dependencies=_jwt)
+app.include_router(recommend_providers.router, prefix="/api", tags=["step2"], dependencies=_jwt)
+app.include_router(feedback.router, prefix="/api", tags=["feedback"], dependencies=_jwt)
+app.include_router(history.router, prefix="/api", tags=["history"], dependencies=_jwt)
+app.include_router(organizations.router, prefix="/api", tags=["organizations"], dependencies=_jwt)
+app.include_router(roles.router, prefix="/api", tags=["roles"], dependencies=_jwt)
+app.include_router(users.router, prefix="/api", tags=["users"], dependencies=_jwt)
 
 
 @app.get("/api/health")

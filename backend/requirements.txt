@@ -24,3 +24,9 @@ openai>=1.40
 
 # PostgreSQL (document store persistence)
 psycopg2-binary>=2.9
+
+# JWT authentication
+python-jose[cryptography]>=3.3.0
+
+# Azure Communication Services SMS (stub for dev — real calls are commented out)
+azure-communication-sms>=1.0.0

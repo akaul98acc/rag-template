@@ -76,6 +76,9 @@ _ROLES_FALLBACK: dict[str, dict] = {
 
 _SEEDED_ROLE_NAMES: frozenset[str] = frozenset({"Admin", "Manager", "User", "Viewer"})
 
+# In-memory fallback for OTP tokens (keyed by token id str)
+_OTP_TOKENS_FALLBACK: dict[str, dict] = {}
+
 
 @dataclass
 class _StoredDocumentRow:
@@ -190,6 +193,20 @@ CREATE TABLE IF NOT EXISTS recommendation_feedback (
 CREATE INDEX IF NOT EXISTS idx_feedback_recommendation_id ON recommendation_feedback(recommendation_id);
 """
 
+_CREATE_OTP_TOKENS_SQL = """
+CREATE TABLE IF NOT EXISTS otp_tokens (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    otp_hash     TEXT        NOT NULL,
+    otp_value    TEXT        NOT NULL,
+    phone_number TEXT        NOT NULL,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    used         BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_otp_tokens_user_id ON otp_tokens(user_id);
+"""
+
 # ---------------------------------------------------------------------------
 # Lifecycle helpers
 # ---------------------------------------------------------------------------
@@ -286,6 +303,8 @@ def _ensure_schema(conn: Any) -> None:
         ):
             cur.execute(f"ALTER TABLE roles ADD COLUMN IF NOT EXISTS {_col} {_defn}")
         cur.execute(_CREATE_USERS_SQL)
+        cur.execute(_CREATE_OTP_TOKENS_SQL)
+        cur.execute("ALTER TABLE otp_tokens ADD COLUMN IF NOT EXISTS otp_value TEXT NOT NULL DEFAULT ''")
 
         # ── 2. Column migrations on recommendations ───────────────────────────
         cur.execute(
@@ -1387,3 +1406,177 @@ async def db_delete_user(user_id: str) -> bool:
             return cur.rowcount > 0
 
     return await asyncio.to_thread(lambda: _run(_do))
+
+
+# ---------------------------------------------------------------------------
+# Auth / OTP API
+# ---------------------------------------------------------------------------
+
+_AUTH_USER_SELECT = """
+    SELECT u.id, u.email, u.phone_number,
+           u.org_id, o.org_code,
+           u.role_id, r.name AS role_name
+    FROM users u
+    JOIN organizations o ON o.id = u.org_id
+    LEFT JOIN roles r ON r.id = u.role_id
+"""
+
+
+async def db_get_user_by_email_and_org(email: str, org_code: str) -> dict | None:
+    """Fetch a non-deleted user matching email + org code. Returns None if not found."""
+    if _conn is None:
+        for user in _USERS_FALLBACK.values():
+            if (
+                user.get("email", "").lower() == email.lower()
+                and user.get("deleted_on") is None
+            ):
+                org = _ORGS_FALLBACK.get(user.get("org_id", ""), {})
+                if org.get("org_code") == org_code:
+                    role = _ROLES_FALLBACK.get(user.get("role_id", ""), {})
+                    return {
+                        "id": user["id"],
+                        "email": user["email"],
+                        "phone_number": user.get("phone_number"),
+                        "org_id": user.get("org_id"),
+                        "org_code": org.get("org_code"),
+                        "role_name": role.get("name"),
+                    }
+        return None
+
+    def _do() -> dict | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                f"{_AUTH_USER_SELECT} WHERE LOWER(u.email) = LOWER(%s)"
+                " AND o.org_code = %s AND u.deleted_on IS NULL LIMIT 1",
+                (email, org_code),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        if row is None:
+            return None
+        result = dict(zip(columns, row))
+        result["id"] = str(result["id"])
+        if result.get("org_id"):
+            result["org_id"] = str(result["org_id"])
+        return result
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_create_otp(user_id: str, otp_hash: str, otp_value: str, phone_number: str, expires_at: Any) -> dict:
+    """Insert a new OTP token row and return it."""
+    if _conn is None:
+        import uuid
+        from datetime import datetime, timezone
+
+        token_id = str(uuid.uuid4())
+        row: dict = {
+            "id": token_id,
+            "user_id": user_id,
+            "otp_hash": otp_hash,
+            "otp_value": otp_value,
+            "phone_number": phone_number,
+            "expires_at": expires_at.isoformat() if hasattr(expires_at, "isoformat") else str(expires_at),
+            "used": False,
+            "created_at": datetime.now(tz=timezone.utc).isoformat(),
+        }
+        _OTP_TOKENS_FALLBACK[token_id] = row
+        return row
+
+    def _do() -> dict:
+        with _conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO otp_tokens (user_id, otp_hash, otp_value, phone_number, expires_at)
+                VALUES (%s::uuid, %s, %s, %s, %s)
+                RETURNING id, user_id, otp_hash, otp_value, phone_number, expires_at, used, created_at
+                """,
+                (user_id, otp_hash, otp_value, phone_number, expires_at),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        result = dict(zip(columns, row))
+        result["id"] = str(result["id"])
+        result["user_id"] = str(result["user_id"])
+        return result
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_invalidate_user_otps(user_id: str) -> None:
+    """Mark all pending (unused) OTPs for a user as used."""
+    if _conn is None:
+        for row in _OTP_TOKENS_FALLBACK.values():
+            if row["user_id"] == user_id and not row["used"]:
+                row["used"] = True
+        return
+
+    def _do() -> None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                "UPDATE otp_tokens SET used = TRUE WHERE user_id = %s::uuid AND used = FALSE",
+                (user_id,),
+            )
+
+    await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_get_pending_otp(user_id: str) -> dict | None:
+    """Return the most recent valid (non-used, non-expired) OTP for the user, or None."""
+    if _conn is None:
+        from datetime import datetime, timezone
+
+        now = datetime.now(tz=timezone.utc)
+        candidates = [
+            r for r in _OTP_TOKENS_FALLBACK.values()
+            if r["user_id"] == user_id and not r["used"]
+        ]
+        for row in sorted(candidates, key=lambda r: r["created_at"], reverse=True):
+            expires = row["expires_at"]
+            if isinstance(expires, str):
+                expires = datetime.fromisoformat(expires)
+            if expires.tzinfo is None:
+                from datetime import timezone as tz
+                expires = expires.replace(tzinfo=tz.utc)
+            if expires > now:
+                return row
+        return None
+
+    def _do() -> dict | None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, user_id, otp_hash, phone_number, expires_at, used, created_at
+                FROM otp_tokens
+                WHERE user_id = %s::uuid AND used = FALSE AND expires_at > NOW()
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (user_id,),
+            )
+            columns = [col.name for col in cur.description]
+            row = cur.fetchone()
+        if row is None:
+            return None
+        result = dict(zip(columns, row))
+        result["id"] = str(result["id"])
+        result["user_id"] = str(result["user_id"])
+        return result
+
+    return await asyncio.to_thread(lambda: _run(_do))
+
+
+async def db_mark_otp_used(otp_id: str) -> None:
+    """Mark an OTP token as used (invalidate on first successful verify)."""
+    if _conn is None:
+        if otp_id in _OTP_TOKENS_FALLBACK:
+            _OTP_TOKENS_FALLBACK[otp_id]["used"] = True
+        return
+
+    def _do() -> None:
+        with _conn.cursor() as cur:
+            cur.execute(
+                "UPDATE otp_tokens SET used = TRUE WHERE id = %s::uuid",
+                (otp_id,),
+            )
+
+    await asyncio.to_thread(lambda: _run(_do))
