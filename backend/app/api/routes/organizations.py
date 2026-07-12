@@ -11,6 +11,7 @@ from app.models.organization import (
     OrganizationResponse,
     OrganizationUpdate,
 )
+from app.api.deps import get_or_404
 from app.services.database import (
     db_check_org_code,
     db_create_organization,
@@ -56,17 +57,16 @@ async def check_org_code(org_code: str = Query(..., min_length=1)) -> dict:
 
 @router.get("/organizations/{org_id}", response_model=OrganizationResponse)
 async def get_organization(org_id: str) -> OrganizationResponse:
-    row = await db_get_organization(org_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Organization not found")
+    row = await get_or_404(db_get_organization(org_id), detail="Organization not found")
     return OrganizationResponse(**row)
 
 
 @router.put("/organizations/{org_id}", response_model=OrganizationResponse)
 async def update_organization(org_id: str, body: OrganizationUpdate) -> OrganizationResponse:
-    row = await db_update_organization(org_id, {**body.model_dump(), "updated_by": "system"})
-    if row is None:
-        raise HTTPException(status_code=404, detail="Organization not found")
+    row = await get_or_404(
+        db_update_organization(org_id, {**body.model_dump(), "updated_by": "system"}),
+        detail="Organization not found",
+    )
     return OrganizationResponse(**row)
 
 

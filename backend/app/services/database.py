@@ -609,8 +609,71 @@ def get_lock() -> threading.Lock:
 
 
 # ---------------------------------------------------------------------------
+# Shared serialisation helpers
+# ---------------------------------------------------------------------------
+
+
+def serialize_row(
+    row_dict: dict,
+    uuid_cols: tuple[str, ...] = (),
+    nullable_uuid_cols: tuple[str, ...] = (),
+    ts_cols: tuple[str, ...] = (),
+    nullable_ts_cols: tuple[str, ...] = (),
+) -> dict:
+    """Convert UUID and datetime columns to strings in-place. Returns row_dict."""
+    for col in uuid_cols:
+        row_dict[col] = str(row_dict[col])
+    for col in nullable_uuid_cols:
+        if row_dict.get(col) is not None:
+            row_dict[col] = str(row_dict[col])
+    for col in ts_cols:
+        row_dict[col] = str(row_dict[col])
+    for col in nullable_ts_cols:
+        if row_dict.get(col) is not None:
+            row_dict[col] = str(row_dict[col])
+    return row_dict
+
+
+def _db_list_entity_sync(
+    *,
+    select_sql: str,
+    count_sql: str,
+    all_filters: list[tuple[str, list]],
+    serialize: Any,
+    page: int,
+    page_size: int,
+    order_by: str,
+) -> dict:
+    """Paginated list query — must be called inside _run() with _conn live."""
+    conditions = [f[0] for f in all_filters if f[0]]
+    params: list[Any] = []
+    for _, p in all_filters:
+        params.extend(p)
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    with _conn.cursor() as cur:
+        cur.execute(f"{count_sql} {where_clause}", params)
+        total: int = cur.fetchone()[0]
+        offset = (page - 1) * page_size
+        cur.execute(
+            f"{select_sql} {where_clause} ORDER BY {order_by} LIMIT %s OFFSET %s",
+            params + [page_size, offset],
+        )
+        columns = [col.name for col in cur.description]
+        rows = cur.fetchall()
+    items = [serialize(dict(zip(columns, row))) for row in rows]
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+# ---------------------------------------------------------------------------
 # Organization CRUD API
 # ---------------------------------------------------------------------------
+
+
+_ORG_SELECT = (
+    "SELECT id AS org_id, name, org_code, website, phone_number, contact_person, "
+    "plan_selected, created_from, created_by, created_on, updated_by, updated_on "
+    "FROM organizations"
+)
 
 
 async def db_list_organizations(
@@ -637,45 +700,20 @@ async def db_list_organizations(
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     def _do() -> dict:
-        conditions: list[str] = []
-        params: list[Any] = []
+        all_filters: list[tuple[str, list[Any]]] = []
         if search:
-            conditions.append("(name ILIKE %s OR org_code ILIKE %s)")
-            like = f"%{search}%"
-            params.extend([like, like])
+            all_filters.append(("(name ILIKE %s OR org_code ILIKE %s)", [f"%{search}%", f"%{search}%"]))
         if plan:
-            conditions.append("plan_selected = %s")
-            params.append(plan)
-        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        with _conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM organizations {where_clause}", params)
-            total: int = cur.fetchone()[0]
-
-            offset = (page - 1) * page_size
-            cur.execute(
-                f"""
-                SELECT id AS org_id, name, org_code, website, phone_number, contact_person,
-                       plan_selected, created_from, created_by, created_on,
-                       updated_by, updated_on
-                FROM organizations
-                {where_clause}
-                ORDER BY created_on DESC
-                LIMIT %s OFFSET %s
-                """,
-                params + [page_size, offset],
-            )
-            columns = [col.name for col in cur.description]
-            rows = cur.fetchall()
-
-        items: list[dict] = []
-        for row in rows:
-            row_dict = dict(zip(columns, row))
-            row_dict["org_id"] = str(row_dict["org_id"])
-            row_dict["created_on"] = str(row_dict["created_on"])
-            row_dict["updated_on"] = str(row_dict["updated_on"])
-            items.append(row_dict)
-        return {"items": items, "total": total, "page": page, "page_size": page_size}
+            all_filters.append(("plan_selected = %s", [plan]))
+        return _db_list_entity_sync(
+            select_sql=_ORG_SELECT,
+            count_sql="SELECT COUNT(*) FROM organizations",
+            all_filters=all_filters,
+            serialize=lambda r: serialize_row(r, uuid_cols=("org_id",), ts_cols=("created_on", "updated_on")),
+            page=page,
+            page_size=page_size,
+            order_by="created_on DESC",
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -688,24 +726,14 @@ async def db_get_organization(org_id: str) -> dict | None:
     def _do() -> dict | None:
         with _conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT id AS org_id, name, org_code, website, phone_number, contact_person,
-                       plan_selected, created_from, created_by, created_on,
-                       updated_by, updated_on
-                FROM organizations
-                WHERE id = %s
-                """,
+                f"{_ORG_SELECT} WHERE id = %s",
                 (org_id,),
             )
             columns = [col.name for col in cur.description]
             row = cur.fetchone()
         if row is None:
             return None
-        row_dict = dict(zip(columns, row))
-        row_dict["org_id"] = str(row_dict["org_id"])
-        row_dict["created_on"] = str(row_dict["created_on"])
-        row_dict["updated_on"] = str(row_dict["updated_on"])
-        return row_dict
+        return serialize_row(dict(zip(columns, row)), uuid_cols=("org_id",), ts_cols=("created_on", "updated_on"))
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -787,11 +815,7 @@ async def db_create_organization(data: dict) -> dict:
             )
             columns = [col.name for col in cur.description]
             row = cur.fetchone()
-        row_dict = dict(zip(columns, row))
-        row_dict["org_id"] = str(row_dict["org_id"])
-        row_dict["created_on"] = str(row_dict["created_on"])
-        row_dict["updated_on"] = str(row_dict["updated_on"])
-        return row_dict
+        return serialize_row(dict(zip(columns, row)), uuid_cols=("org_id",), ts_cols=("created_on", "updated_on"))
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -845,11 +869,7 @@ async def db_update_organization(org_id: str, data: dict) -> dict | None:
             row = cur.fetchone()
         if row is None:
             return None
-        row_dict = dict(zip(columns, row))
-        row_dict["org_id"] = str(row_dict["org_id"])
-        row_dict["created_on"] = str(row_dict["created_on"])
-        row_dict["updated_on"] = str(row_dict["updated_on"])
-        return row_dict
+        return serialize_row(dict(zip(columns, row)), uuid_cols=("org_id",), ts_cols=("created_on", "updated_on"))
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -886,19 +906,6 @@ _USER_SELECT = """
 """
 
 
-def _serialize_user_row(row_dict: dict) -> dict:
-    row_dict["id"] = str(row_dict["id"])
-    if row_dict.get("org_id") is not None:
-        row_dict["org_id"] = str(row_dict["org_id"])
-    if row_dict.get("role_id") is not None:
-        row_dict["role_id"] = str(row_dict["role_id"])
-    row_dict["created_on"] = str(row_dict["created_on"])
-    row_dict["updated_on"] = str(row_dict["updated_on"])
-    if row_dict.get("deleted_on") is not None:
-        row_dict["deleted_on"] = str(row_dict["deleted_on"])
-    return row_dict
-
-
 async def db_list_users(
     page: int = 1,
     page_size: int = 20,
@@ -925,33 +932,24 @@ async def db_list_users(
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     def _do() -> dict:
-        conditions: list[str] = ["u.deleted_on IS NULL"]
-        params: list[Any] = []
+        all_filters: list[tuple[str, list[Any]]] = [("u.deleted_on IS NULL", [])]
         if search:
-            conditions.append("(u.name ILIKE %s OR u.email ILIKE %s)")
-            like = f"%{search}%"
-            params.extend([like, like])
-        where_clause = "WHERE " + " AND ".join(conditions)
-
-        with _conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM users u {where_clause}", params)
-            total: int = cur.fetchone()[0]
-
-            offset = (page - 1) * page_size
-            cur.execute(
-                f"""
-                {_USER_SELECT}
-                {where_clause}
-                ORDER BY u.created_on DESC
-                LIMIT %s OFFSET %s
-                """,
-                params + [page_size, offset],
-            )
-            columns = [col.name for col in cur.description]
-            rows = cur.fetchall()
-
-        items = [_serialize_user_row(dict(zip(columns, row))) for row in rows]
-        return {"items": items, "total": total, "page": page, "page_size": page_size}
+            all_filters.append(("(u.name ILIKE %s OR u.email ILIKE %s)", [f"%{search}%", f"%{search}%"]))
+        return _db_list_entity_sync(
+            select_sql=_USER_SELECT,
+            count_sql="SELECT COUNT(*) FROM users u",
+            all_filters=all_filters,
+            serialize=lambda r: serialize_row(
+                r,
+                uuid_cols=("id",),
+                nullable_uuid_cols=("org_id", "role_id"),
+                ts_cols=("created_on", "updated_on"),
+                nullable_ts_cols=("deleted_on",),
+            ),
+            page=page,
+            page_size=page_size,
+            order_by="u.created_on DESC",
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -976,7 +974,13 @@ async def db_get_user(user_id: str) -> dict | None:
             row = cur.fetchone()
         if row is None:
             return None
-        return _serialize_user_row(dict(zip(columns, row)))
+        return serialize_row(
+            dict(zip(columns, row)),
+            uuid_cols=("id",),
+            nullable_uuid_cols=("org_id", "role_id"),
+            ts_cols=("created_on", "updated_on"),
+            nullable_ts_cols=("deleted_on",),
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -1067,7 +1071,13 @@ async def db_create_user(data: dict) -> dict:
             )
             columns = [col.name for col in cur.description]
             row = cur.fetchone()
-        return _serialize_user_row(dict(zip(columns, row)))
+        return serialize_row(
+            dict(zip(columns, row)),
+            uuid_cols=("id",),
+            nullable_uuid_cols=("org_id", "role_id"),
+            ts_cols=("created_on", "updated_on"),
+            nullable_ts_cols=("deleted_on",),
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -1122,18 +1132,15 @@ async def db_update_user(user_id: str, data: dict) -> dict | None:
             row = cur.fetchone()
         if row is None:
             return None
-        return _serialize_user_row(dict(zip(columns, row)))
+        return serialize_row(
+            dict(zip(columns, row)),
+            uuid_cols=("id",),
+            nullable_uuid_cols=("org_id", "role_id"),
+            ts_cols=("created_on", "updated_on"),
+            nullable_ts_cols=("deleted_on",),
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
-
-
-def _serialize_role_row(row_dict: dict) -> dict:
-    row_dict["id"] = str(row_dict["id"])
-    row_dict["created_on"] = str(row_dict["created_on"])
-    row_dict["updated_on"] = str(row_dict["updated_on"])
-    if row_dict.get("deleted_on") is not None:
-        row_dict["deleted_on"] = str(row_dict["deleted_on"])
-    return row_dict
 
 
 _ROLE_SELECT = "SELECT id, name, created_by, created_on, updated_by, updated_on, deleted_by, deleted_on FROM roles"
@@ -1157,27 +1164,23 @@ async def db_list_roles(
         return {"items": list(items), "total": total, "page": page, "page_size": page_size}
 
     def _do() -> dict:
-        conditions: list[str] = ["deleted_on IS NULL"]
-        params: list[Any] = []
+        all_filters: list[tuple[str, list[Any]]] = [("deleted_on IS NULL", [])]
         if search:
-            conditions.append("name ILIKE %s")
-            params.append(f"%{search}%")
-        where_clause = "WHERE " + " AND ".join(conditions)
-
-        with _conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM roles {where_clause}", params)
-            total: int = cur.fetchone()[0]
-
-            offset = (page - 1) * page_size
-            cur.execute(
-                f"{_ROLE_SELECT} {where_clause} ORDER BY name LIMIT %s OFFSET %s",
-                params + [page_size, offset],
-            )
-            columns = [col.name for col in cur.description]
-            rows = cur.fetchall()
-
-        result = [_serialize_role_row(dict(zip(columns, row))) for row in rows]
-        return {"items": result, "total": total, "page": page, "page_size": page_size}
+            all_filters.append(("name ILIKE %s", [f"%{search}%"]))
+        return _db_list_entity_sync(
+            select_sql=_ROLE_SELECT,
+            count_sql="SELECT COUNT(*) FROM roles",
+            all_filters=all_filters,
+            serialize=lambda r: serialize_row(
+                r,
+                uuid_cols=("id",),
+                ts_cols=("created_on", "updated_on"),
+                nullable_ts_cols=("deleted_on",),
+            ),
+            page=page,
+            page_size=page_size,
+            order_by="name",
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -1198,7 +1201,12 @@ async def db_get_role(role_id: str) -> dict | None:
             row = cur.fetchone()
         if row is None:
             return None
-        return _serialize_role_row(dict(zip(columns, row)))
+        return serialize_row(
+            dict(zip(columns, row)),
+            uuid_cols=("id",),
+            ts_cols=("created_on", "updated_on"),
+            nullable_ts_cols=("deleted_on",),
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -1255,7 +1263,12 @@ async def db_create_role(data: dict) -> dict:
             )
             columns = [col.name for col in cur.description]
             row = cur.fetchone()
-        return _serialize_role_row(dict(zip(columns, row)))
+        return serialize_row(
+            dict(zip(columns, row)),
+            uuid_cols=("id",),
+            ts_cols=("created_on", "updated_on"),
+            nullable_ts_cols=("deleted_on",),
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -1288,7 +1301,12 @@ async def db_update_role(role_id: str, data: dict) -> dict | None:
             row = cur.fetchone()
         if row is None:
             return None
-        return _serialize_role_row(dict(zip(columns, row)))
+        return serialize_row(
+            dict(zip(columns, row)),
+            uuid_cols=("id",),
+            ts_cols=("created_on", "updated_on"),
+            nullable_ts_cols=("deleted_on",),
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
 
@@ -1339,7 +1357,12 @@ async def db_delete_role(role_id: str) -> dict | None:
             row = cur.fetchone()
         if row is None:
             return None
-        return _serialize_role_row(dict(zip(columns, row)))
+        return serialize_row(
+            dict(zip(columns, row)),
+            uuid_cols=("id",),
+            ts_cols=("created_on", "updated_on"),
+            nullable_ts_cols=("deleted_on",),
+        )
 
     return await asyncio.to_thread(lambda: _run(_do))
 

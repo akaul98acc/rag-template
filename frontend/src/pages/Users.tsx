@@ -2,13 +2,14 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataTable,
+  SlidePanel,
+  ConfirmModal,
+  FieldGroup,
+  PanelActionBar,
+} from "@/components/shared";
+import type { ColumnDef, ActionButton } from "@/components/shared";
+import { useEntityList } from "@/hooks/useEntityList";
 import {
   listUsers,
   createUser,
@@ -78,26 +79,6 @@ function userToForm(user: User): FormState {
     org_id: user.org_id ?? "",
     role_id: user.role_id ?? "",
   };
-}
-
-// ---------------------------------------------------------------------------
-// FieldGroup
-// ---------------------------------------------------------------------------
-
-interface FieldGroupProps {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}
-
-function FieldGroup({ label, error, children }: FieldGroupProps) {
-  return (
-    <div className="flex flex-col gap-1">
-      <label className="text-sm font-medium text-fg">{label}</label>
-      {children}
-      {error && <p className="text-xs text-danger">{error}</p>}
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +167,6 @@ function UserPanel({
       if (!form.org_id) next.org_id = "Required";
     }
     if (!form.role_id) next.role_id = "Required";
-    // preserve async email error from blur check
     if (!next.email && errors.email) next.email = errors.email;
     setErrors(next);
     return Object.keys(next).length === 0;
@@ -205,244 +185,136 @@ function UserPanel({
         ? "Edit User"
         : (selected?.name ?? "User");
 
+  const buttons: ActionButton[] =
+    mode === "view"
+      ? [
+          { label: "Edit", onClick: onEdit, flex1: true },
+          { label: "Delete", onClick: onDelete, variant: "destructive" },
+        ]
+      : mode === "edit"
+        ? [
+            { label: saving ? "Updating…" : "Update", onClick: handleSubmit, disabled: saving, flex1: true },
+            { label: "Cancel", onClick: onCancelEdit, variant: "secondary" },
+          ]
+        : [
+            { label: saving ? "Saving…" : "Save", onClick: handleSubmit, disabled: saving, flex1: true },
+            { label: "Cancel", onClick: onClose, variant: "secondary" },
+          ];
+
   return (
-    <>
-      <div
-        className="fixed inset-0 bg-black/40 z-40"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div
-        role="dialog"
-        aria-label={title}
-        className="fixed right-0 top-0 h-full w-full max-w-md bg-surface border-l border-border shadow-xl z-50 flex flex-col overflow-y-auto"
-      >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
-          <h2 className="text-lg font-semibold m-0">{title}</h2>
-          <button
-            type="button"
-            className="text-fg-muted hover:text-fg p-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
-            onClick={onClose}
-            aria-label="Close panel"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
+    <SlidePanel title={title} onClose={onClose} footer={<PanelActionBar buttons={buttons} />}>
+      <FieldGroup label="Name" error={errors.name}>
+        {isReadOnly ? (
+          <p className="text-sm text-fg py-1">{selected?.name}</p>
+        ) : (
+          <Input
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="Jane Smith"
+          />
+        )}
+      </FieldGroup>
 
-        <div className="flex flex-col gap-4 px-6 py-5 flex-1">
-          <FieldGroup label="Name" error={errors.name}>
-            {isReadOnly ? (
-              <p className="text-sm text-fg py-1">{selected?.name}</p>
-            ) : (
-              <Input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Jane Smith"
-              />
-            )}
-          </FieldGroup>
-
-          <FieldGroup label="Email" error={errors.email}>
-            {isReadOnly || mode === "edit" ? (
-              <p className="text-sm text-fg py-1">{selected?.email ?? form.email}</p>
-            ) : (
-              <div className="relative">
-                <Input
-                  type="email"
-                  value={form.email}
-                  onChange={(e) => {
-                    setForm({ ...form, email: e.target.value });
-                    setErrors((prev) => { const n = { ...prev }; delete n.email; return n; });
-                  }}
-                  onBlur={handleEmailBlur}
-                  placeholder="jane@example.com"
-                />
-                {emailChecking && (
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-fg-muted">
-                    Checking…
-                  </span>
-                )}
-              </div>
-            )}
-          </FieldGroup>
-
-          <FieldGroup label="Organization" error={errors.org_id}>
-            {isReadOnly || mode === "edit" ? (
-              <p className="text-sm text-fg py-1">
-                {selected?.org_name ?? "—"}
-              </p>
-            ) : (
-              <select
-                value={form.org_id}
-                onChange={(e) => {
-                  setForm({ ...form, org_id: e.target.value });
-                  setErrors((prev) => { const n = { ...prev }; delete n.org_id; return n; });
-                }}
-                className="flex h-9 w-full rounded-md border border-border-strong bg-surface px-3 py-1 text-sm text-fg shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
-              >
-                <option value="">
-                  {orgs.length === 0 ? "No organizations available" : "Select organization…"}
-                </option>
-                {orgs.map((org) => (
-                  <option key={org.org_id} value={org.org_id}>
-                    {org.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </FieldGroup>
-
-          <FieldGroup label="Role" error={errors.role_id}>
-            {isReadOnly ? (
-              <p className="text-sm text-fg py-1">{selected?.role_name ?? "—"}</p>
-            ) : (
-              <select
-                value={form.role_id}
-                onChange={(e) => {
-                  setForm({ ...form, role_id: e.target.value });
-                  setErrors((prev) => { const n = { ...prev }; delete n.role_id; return n; });
-                }}
-                className="flex h-9 w-full rounded-md border border-border-strong bg-surface px-3 py-1 text-sm text-fg shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
-              >
-                <option value="">
-                  {roles.length === 0 ? "No roles available" : "Select role…"}
-                </option>
-                {roles.map((role) => (
-                  <option key={role.id} value={role.id}>
-                    {role.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </FieldGroup>
-
-          <FieldGroup label="Phone Number">
-            {isReadOnly ? (
-              <p className="text-sm text-fg py-1">{selected?.phone_number || "—"}</p>
-            ) : (
-              <Input
-                value={form.phone_number}
-                onChange={(e) => setForm({ ...form, phone_number: e.target.value })}
-                placeholder="+1 555 000 0000"
-                type="tel"
-              />
-            )}
-          </FieldGroup>
-
-          {mode === "view" && selected && (
-            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-border text-sm text-fg-muted">
-              <div>
-                <p className="font-medium text-xs uppercase tracking-wide mb-1">Created</p>
-                <p>{formatDate(selected.created_on)}</p>
-                <p className="text-xs truncate">{selected.created_by}</p>
-              </div>
-              <div>
-                <p className="font-medium text-xs uppercase tracking-wide mb-1">Updated</p>
-                <p>{formatDate(selected.updated_on)}</p>
-                <p className="text-xs truncate">{selected.updated_by}</p>
-              </div>
-            </div>
-          )}
-
-          <div className="mt-auto pt-4 flex gap-2 border-t border-border">
-            {mode === "view" ? (
-              <>
-                <Button type="button" onClick={onEdit} className="flex-1">
-                  Edit
-                </Button>
-                <Button type="button" variant="destructive" onClick={onDelete}>
-                  Delete
-                </Button>
-              </>
-            ) : mode === "edit" ? (
-              <>
-                <Button type="button" disabled={saving} onClick={handleSubmit} className="flex-1">
-                  {saving ? "Updating…" : "Update"}
-                </Button>
-                <Button type="button" variant="secondary" onClick={onCancelEdit}>
-                  Cancel
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button type="button" disabled={saving} onClick={handleSubmit} className="flex-1">
-                  {saving ? "Saving…" : "Save"}
-                </Button>
-                <Button type="button" variant="secondary" onClick={onClose}>
-                  Cancel
-                </Button>
-              </>
+      <FieldGroup label="Email" error={errors.email}>
+        {isReadOnly || mode === "edit" ? (
+          <p className="text-sm text-fg py-1">{selected?.email ?? form.email}</p>
+        ) : (
+          <div className="relative">
+            <Input
+              type="email"
+              value={form.email}
+              onChange={(e) => {
+                setForm({ ...form, email: e.target.value });
+                setErrors((prev) => { const n = { ...prev }; delete n.email; return n; });
+              }}
+              onBlur={handleEmailBlur}
+              placeholder="jane@example.com"
+            />
+            {emailChecking && (
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-fg-muted">
+                Checking…
+              </span>
             )}
           </div>
+        )}
+      </FieldGroup>
+
+      <FieldGroup label="Organization" error={errors.org_id}>
+        {isReadOnly || mode === "edit" ? (
+          <p className="text-sm text-fg py-1">{selected?.org_name ?? "—"}</p>
+        ) : (
+          <select
+            value={form.org_id}
+            onChange={(e) => {
+              setForm({ ...form, org_id: e.target.value });
+              setErrors((prev) => { const n = { ...prev }; delete n.org_id; return n; });
+            }}
+            className="flex h-9 w-full rounded-md border border-border-strong bg-surface px-3 py-1 text-sm text-fg shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
+          >
+            <option value="">
+              {orgs.length === 0 ? "No organizations available" : "Select organization…"}
+            </option>
+            {orgs.map((org) => (
+              <option key={org.org_id} value={org.org_id}>
+                {org.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </FieldGroup>
+
+      <FieldGroup label="Role" error={errors.role_id}>
+        {isReadOnly ? (
+          <p className="text-sm text-fg py-1">{selected?.role_name ?? "—"}</p>
+        ) : (
+          <select
+            value={form.role_id}
+            onChange={(e) => {
+              setForm({ ...form, role_id: e.target.value });
+              setErrors((prev) => { const n = { ...prev }; delete n.role_id; return n; });
+            }}
+            className="flex h-9 w-full rounded-md border border-border-strong bg-surface px-3 py-1 text-sm text-fg shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
+          >
+            <option value="">
+              {roles.length === 0 ? "No roles available" : "Select role…"}
+            </option>
+            {roles.map((role) => (
+              <option key={role.id} value={role.id}>
+                {role.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </FieldGroup>
+
+      <FieldGroup label="Phone Number">
+        {isReadOnly ? (
+          <p className="text-sm text-fg py-1">{selected?.phone_number || "—"}</p>
+        ) : (
+          <Input
+            value={form.phone_number}
+            onChange={(e) => setForm({ ...form, phone_number: e.target.value })}
+            placeholder="+1 555 000 0000"
+            type="tel"
+          />
+        )}
+      </FieldGroup>
+
+      {mode === "view" && selected && (
+        <div className="grid grid-cols-2 gap-4 pt-4 border-t border-border text-sm text-fg-muted">
+          <div>
+            <p className="font-medium text-xs uppercase tracking-wide mb-1">Created</p>
+            <p>{formatDate(selected.created_on)}</p>
+            <p className="text-xs truncate">{selected.created_by}</p>
+          </div>
+          <div>
+            <p className="font-medium text-xs uppercase tracking-wide mb-1">Updated</p>
+            <p>{formatDate(selected.updated_on)}</p>
+            <p className="text-xs truncate">{selected.updated_by}</p>
+          </div>
         </div>
-      </div>
-    </>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// DeleteConfirm
-// ---------------------------------------------------------------------------
-
-interface DeleteConfirmProps {
-  user: User;
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
-function DeleteConfirm({ user, onConfirm, onCancel }: DeleteConfirmProps) {
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center">
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={onCancel}
-        aria-hidden="true"
-      />
-      <div
-        role="alertdialog"
-        aria-labelledby="del-title"
-        className="relative bg-surface border border-border rounded-lg p-6 w-full max-w-sm shadow-xl"
-      >
-        <h3 id="del-title" className="text-base font-semibold mb-2 m-0">
-          Delete user?
-        </h3>
-        <p className="text-sm text-fg-muted mb-5">
-          <strong>{user.name}</strong> ({user.email}) will be removed from the
-          system. This action cannot be undone.
-        </p>
-        <div className="flex gap-2 justify-end">
-          <Button variant="secondary" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button variant="destructive" onClick={onConfirm}>
-            Delete
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// SkeletonRows
-// ---------------------------------------------------------------------------
-
-function SkeletonRows() {
-  return (
-    <>
-      {Array.from({ length: 5 }).map((_, i) => (
-        <TableRow key={i}>
-          {Array.from({ length: 5 }).map((_, j) => (
-            <TableCell key={j}>
-              <div className="h-4 bg-fg-subtle/20 rounded animate-pulse" />
-            </TableCell>
-          ))}
-        </TableRow>
-      ))}
-    </>
+      )}
+    </SlidePanel>
   );
 }
 
@@ -451,55 +323,19 @@ function SkeletonRows() {
 // ---------------------------------------------------------------------------
 
 export default function Users() {
-  const [users, setUsers] = useState<User[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<User | null>(null);
   const [mode, setMode] = useState<Mode>("view");
   const [panelOpen, setPanelOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
 
-  useEffect(() => {
-    const id = setTimeout(() => {
-      setDebouncedSearch(search);
-      setPage(1);
-    }, 300);
-    return () => clearTimeout(id);
-  }, [search]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    listUsers({
-      page,
-      page_size: PAGE_SIZE,
-      ...(debouncedSearch ? { search: debouncedSearch } : {}),
-    })
-      .then((res) => {
-        if (cancelled) return;
-        setUsers(res.items);
-        setTotal(res.total);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        toast({ variant: "destructive", title: "Failed to load users." });
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [page, debouncedSearch, refreshKey]);
+  const { items: users, total, page, setPage, search, setSearch, loading, refresh } =
+    useEntityList<User>({
+      fetcher: (params) => listUsers(params),
+      pageSize: PAGE_SIZE,
+    });
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const startItem = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const endItem = Math.min(page * PAGE_SIZE, total);
 
   function openCreate() {
     setSelected(null);
@@ -543,7 +379,7 @@ export default function Users() {
         toast({ title: "User updated." });
       }
       setPanelOpen(false);
-      setRefreshKey((k) => k + 1);
+      refresh();
     } catch (err: unknown) {
       if (hasStatus(err, 409)) {
         reportError("email", "This email is already taken");
@@ -562,11 +398,37 @@ export default function Users() {
       toast({ title: "User deleted." });
       setDeleteTarget(null);
       setPanelOpen(false);
-      setRefreshKey((k) => k + 1);
+      refresh();
     } catch {
       toast({ variant: "destructive", title: "Failed to delete user." });
     }
   }
+
+  const columns: ColumnDef<User>[] = [
+    {
+      key: "name",
+      label: "Name",
+      render: (u) => <span className="font-medium">{u.name}</span>,
+    },
+    { key: "email", label: "Email", className: "text-fg-muted" },
+    {
+      key: "org_name",
+      label: "Organization",
+      render: (u) => <span className="text-fg-muted">{u.org_name ?? "—"}</span>,
+    },
+    {
+      key: "role_name",
+      label: "Role",
+      render: (u) => <span className="text-fg-muted">{u.role_name ?? "—"}</span>,
+    },
+    {
+      key: "created_on",
+      label: "Created",
+      render: (u) => (
+        <span className="text-fg-muted whitespace-nowrap">{formatDate(u.created_on)}</span>
+      ),
+    },
+  ];
 
   return (
     <section>
@@ -584,84 +446,23 @@ export default function Users() {
         />
       </div>
 
-      <div className="overflow-x-auto bg-surface border border-border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Organization</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Created</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loading && <SkeletonRows />}
-
-            {!loading && users.length === 0 && (
-              <TableRow>
-                <TableCell
-                  colSpan={5}
-                  className="text-center py-12 text-fg-muted"
-                >
-                  No users found. Click <strong>Add User</strong> to create the
-                  first one.
-                </TableCell>
-              </TableRow>
-            )}
-
-            {!loading &&
-              users.map((user) => (
-                <TableRow
-                  key={user.id}
-                  className="cursor-pointer"
-                  onClick={() => openView(user)}
-                >
-                  <TableCell className="font-medium">{user.name}</TableCell>
-                  <TableCell className="text-fg-muted">{user.email}</TableCell>
-                  <TableCell className="text-fg-muted">
-                    {user.org_name ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-fg-muted">
-                    {user.role_name ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-fg-muted whitespace-nowrap">
-                    {formatDate(user.created_on)}
-                  </TableCell>
-                </TableRow>
-              ))}
-          </TableBody>
-        </Table>
-      </div>
-
-      <div className="flex items-center justify-between mt-4 text-sm text-fg-muted">
-        <span>
-          {total === 0
-            ? "No results"
-            : `Showing ${startItem}–${endItem} of ${total}`}
-        </span>
-        <div className="flex items-center gap-3">
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            &lt; Prev
-          </Button>
-          <span>
-            Page {page} / {totalPages}
-          </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Next &gt;
-          </Button>
-        </div>
-      </div>
+      <DataTable
+        columns={columns}
+        rows={users}
+        loading={loading}
+        getRowKey={(u) => u.id}
+        onRowClick={openView}
+        emptyMessage={
+          <>
+            No users found. Click <strong>Add User</strong> to create the first one.
+          </>
+        }
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        pageSize={PAGE_SIZE}
+        onPageChange={setPage}
+      />
 
       {panelOpen && (
         <UserPanel
@@ -679,8 +480,14 @@ export default function Users() {
       )}
 
       {deleteTarget && (
-        <DeleteConfirm
-          user={deleteTarget}
+        <ConfirmModal
+          title="Delete user?"
+          description={
+            <>
+              <strong>{deleteTarget.name}</strong> ({deleteTarget.email}) will be removed from the
+              system. This action cannot be undone.
+            </>
+          }
           onConfirm={handleDelete}
           onCancel={() => setDeleteTarget(null)}
         />

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.api.deps import get_or_404
 from app.models.roles import RoleCreate, RoleListResponse, RoleResponse, RoleUpdate
 from app.services.database import (
     _SEEDED_ROLE_NAMES,
@@ -48,34 +49,26 @@ async def check_role_name(name: str = Query(...)) -> dict:
 
 @router.get("/roles/{role_id}", response_model=RoleResponse)
 async def get_role(role_id: str) -> RoleResponse:
-    row = await db_get_role(role_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Role not found")
+    row = await get_or_404(db_get_role(role_id), detail="Role not found")
     return RoleResponse(**row)
 
 
 @router.put("/roles/{role_id}", response_model=RoleResponse)
 async def update_role(role_id: str, body: RoleUpdate) -> RoleResponse:
-    existing = await db_get_role(role_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail="Role not found")
+    existing = await get_or_404(db_get_role(role_id), detail="Role not found")
     if existing["name"] in _SEEDED_ROLE_NAMES:
         raise HTTPException(status_code=403, detail="Seeded roles cannot be edited")
     if body.name.lower() != existing["name"].lower():
         taken = await db_check_role_name(body.name)
         if taken:
             raise HTTPException(status_code=409, detail="Role name already exists")
-    row = await db_update_role(role_id, {"name": body.name})
-    if row is None:
-        raise HTTPException(status_code=404, detail="Role not found")
+    row = await get_or_404(db_update_role(role_id, {"name": body.name}), detail="Role not found")
     return RoleResponse(**row)
 
 
 @router.delete("/roles/{role_id}", status_code=204)
 async def delete_role(role_id: str) -> None:
-    existing = await db_get_role(role_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail="Role not found")
+    existing = await get_or_404(db_get_role(role_id), detail="Role not found")
     if existing["name"] in _SEEDED_ROLE_NAMES:
         raise HTTPException(status_code=403, detail="Seeded roles cannot be deleted")
     user_count = await db_count_users_for_role(role_id)
