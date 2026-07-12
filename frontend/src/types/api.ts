@@ -159,6 +159,27 @@ export interface OrganizationUpdate {
 export interface Role {
   id: string;
   name: string;
+  created_by: string;
+  created_on: string;
+  updated_by: string;
+  updated_on: string;
+  deleted_by?: string | null;
+  deleted_on?: string | null;
+}
+
+export interface RoleListResponse {
+  items: Role[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface RoleCreate {
+  name: string;
+}
+
+export interface RoleUpdate {
+  name: string;
 }
 
 export interface User {
