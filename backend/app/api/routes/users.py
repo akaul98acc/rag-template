@@ -5,6 +5,7 @@ import psycopg2.errors
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
+from app.api.deps import get_or_404
 from app.models.users import UserCreate, UserListResponse, UserResponse, UserUpdate
 from app.services.database import (
     db_check_email,
@@ -47,17 +48,16 @@ async def check_email(email: str = Query(..., min_length=1)) -> dict:
 
 @router.get("/users/{user_id}", response_model=UserResponse)
 async def get_user(user_id: str) -> UserResponse:
-    row = await db_get_user(user_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="User not found")
+    row = await get_or_404(db_get_user(user_id), detail="User not found")
     return UserResponse(**row)
 
 
 @router.put("/users/{user_id}", response_model=UserResponse)
 async def update_user(user_id: str, body: UserUpdate) -> UserResponse:
-    row = await db_update_user(user_id, {**body.model_dump(), "updated_by": "system"})
-    if row is None:
-        raise HTTPException(status_code=404, detail="User not found")
+    row = await get_or_404(
+        db_update_user(user_id, {**body.model_dump(), "updated_by": "system"}),
+        detail="User not found",
+    )
     return UserResponse(**row)
 
 

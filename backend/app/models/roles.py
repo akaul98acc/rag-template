@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from app.models.base import AuditBase, SoftDeleteMixin
+
 
 class RoleCreate(BaseModel):
     name: str
@@ -11,15 +13,9 @@ class RoleUpdate(BaseModel):
     name: str
 
 
-class RoleResponse(BaseModel):
+class RoleResponse(AuditBase, SoftDeleteMixin):
     id: str
     name: str
-    created_by: str
-    created_on: str
-    updated_by: str
-    updated_on: str
-    deleted_by: str | None
-    deleted_on: str | None
 
 
 class RoleListResponse(BaseModel):

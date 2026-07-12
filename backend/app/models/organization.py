@@ -4,6 +4,8 @@ from enum import Enum
 
 from pydantic import BaseModel
 
+from app.models.base import AuditBase
+
 
 class PlanType(str, Enum):
     free = "free"
@@ -30,7 +32,7 @@ class OrganizationUpdate(BaseModel):
     plan_selected: PlanType
 
 
-class OrganizationResponse(BaseModel):
+class OrganizationResponse(AuditBase):
     org_id: str
     name: str
     org_code: str
@@ -39,10 +41,6 @@ class OrganizationResponse(BaseModel):
     contact_person: str
     plan_selected: str
     created_from: str | None
-    created_by: str
-    created_on: str
-    updated_by: str
-    updated_on: str
 
 
 class OrganizationListResponse(BaseModel):
