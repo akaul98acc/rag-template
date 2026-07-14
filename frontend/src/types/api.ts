@@ -211,7 +211,7 @@ export interface UserCreate {
   name: string;
   email: string;
   phone_number?: string;
-  org_id: string;
+  org_id?: string | null;
   role_id: string;
 }
 
@@ -242,8 +242,8 @@ export interface TokenResponse {
 export interface JwtClaims {
   user_id: string;
   email: string;
-  org_id: string;
-  org_code: string;
+  org_id: string | null;
+  org_code: string | null;
   role: string;
   exp: number;
 }

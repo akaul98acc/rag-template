@@ -72,9 +72,15 @@ _ROLES_FALLBACK: dict[str, dict] = {
         "updated_by": "system", "updated_on": "2024-01-01T00:00:00+00:00",
         "deleted_by": None, "deleted_on": None,
     },
+    "00000001-0000-0000-0000-000000000005": {
+        "id": "00000001-0000-0000-0000-000000000005", "name": "Super Admin",
+        "created_by": "system", "created_on": "2024-01-01T00:00:00+00:00",
+        "updated_by": "system", "updated_on": "2024-01-01T00:00:00+00:00",
+        "deleted_by": None, "deleted_on": None,
+    },
 }
 
-_SEEDED_ROLE_NAMES: frozenset[str] = frozenset({"Admin", "Manager", "User", "Viewer"})
+_SEEDED_ROLE_NAMES: frozenset[str] = frozenset({"Admin", "Manager", "User", "Viewer", "Super Admin"})
 
 # In-memory fallback for OTP tokens (keyed by token id str)
 _OTP_TOKENS_FALLBACK: dict[str, dict] = {}
@@ -353,14 +359,12 @@ def _ensure_schema(conn: Any) -> None:
         except Exception:
             pass  # already exists — safe to ignore with autocommit
 
-        # ── 4. Seed default roles ─────────────────────────────────────────────
-        cur.execute("SELECT COUNT(*) FROM roles")
-        if cur.fetchone()[0] == 0:
-            for rname in ("Admin", "Manager", "User", "Viewer"):
-                cur.execute(
-                    "INSERT INTO roles (name, created_by, updated_by) VALUES (%s, 'system', 'system') ON CONFLICT (name) DO NOTHING",
-                    (rname,),
-                )
+        # ── 4. Seed default roles (idempotent — includes Super Admin) ─────────
+        for rname in ("Admin", "Manager", "User", "Viewer", "Super Admin"):
+            cur.execute(
+                "INSERT INTO roles (name, created_by, updated_by) VALUES (%s, 'system', 'system') ON CONFLICT (name) DO NOTHING",
+                (rname,),
+            )
 
         # ── 5. Column migrations on users ─────────────────────────────────────
         # role TEXT (intermediate schema) → role_id UUID
@@ -1026,10 +1030,23 @@ async def db_list_users(
     page: int = 1,
     page_size: int = 20,
     search: str | None = None,
+    org_id_filter: str | None = None,
 ) -> dict:
-    """Return a paginated list of non-deleted users with optional search."""
+    """Return a paginated list of non-deleted, non-Super-Admin users.
+
+    Super Admin users are always excluded. When org_id_filter is set,
+    only users from that org are returned.
+    """
     if _conn is None:
-        items = [r for r in _USERS_FALLBACK.values() if r.get("deleted_on") is None]
+        super_admin_ids = {
+            uid for uid, r in _ROLES_FALLBACK.items() if r.get("name") == "Super Admin"
+        }
+        items = [
+            r for r in _USERS_FALLBACK.values()
+            if r.get("deleted_on") is None and r.get("role_id") not in super_admin_ids
+        ]
+        if org_id_filter is not None:
+            items = [r for r in items if r.get("org_id") == org_id_filter]
         if search:
             term = search.lower()
             items = [
@@ -1048,12 +1065,17 @@ async def db_list_users(
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     def _do() -> dict:
-        all_filters: list[tuple[str, list[Any]]] = [("u.deleted_on IS NULL", [])]
+        all_filters: list[tuple[str, list[Any]]] = [
+            ("u.deleted_on IS NULL", []),
+            ("(r.name != %s OR r.name IS NULL)", ["Super Admin"]),
+        ]
+        if org_id_filter is not None:
+            all_filters.append(("u.org_id = %s::uuid", [org_id_filter]))
         if search:
             all_filters.append(("(u.name ILIKE %s OR u.email ILIKE %s)", [f"%{search}%", f"%{search}%"]))
         return _db_list_entity_sync(
             select_sql=_USER_SELECT,
-            count_sql="SELECT COUNT(*) FROM users u",
+            count_sql="SELECT COUNT(*) FROM users u LEFT JOIN roles r ON r.id = u.role_id",
             all_filters=all_filters,
             serialize=lambda r: serialize_row(
                 r,
@@ -1514,7 +1536,7 @@ _AUTH_USER_SELECT = """
            u.org_id, o.org_code,
            u.role_id, r.name AS role_name
     FROM users u
-    JOIN organizations o ON o.id = u.org_id
+    LEFT JOIN organizations o ON o.id = u.org_id
     LEFT JOIN roles r ON r.id = u.role_id
 """
 
@@ -1527,6 +1549,17 @@ async def db_get_user_by_email_and_org(email: str, org_code: str) -> dict | None
                 user.get("email", "").lower() == email.lower()
                 and user.get("deleted_on") is None
             ):
+                # Super Admin users (null org_id) match by email only
+                if user.get("org_id") is None:
+                    role = _ROLES_FALLBACK.get(user.get("role_id", ""), {})
+                    return {
+                        "id": user["id"],
+                        "email": user["email"],
+                        "phone_number": user.get("phone_number"),
+                        "org_id": None,
+                        "org_code": None,
+                        "role_name": role.get("name"),
+                    }
                 org = _ORGS_FALLBACK.get(user.get("org_id", ""), {})
                 if org.get("org_code") == org_code:
                     role = _ROLES_FALLBACK.get(user.get("role_id", ""), {})
@@ -1544,7 +1577,8 @@ async def db_get_user_by_email_and_org(email: str, org_code: str) -> dict | None
         with _conn.cursor() as cur:
             cur.execute(
                 f"{_AUTH_USER_SELECT} WHERE LOWER(u.email) = LOWER(%s)"
-                " AND o.org_code = %s AND u.deleted_on IS NULL LIMIT 1",
+                " AND (o.org_code = %s OR u.org_id IS NULL)"
+                " AND u.deleted_on IS NULL LIMIT 1",
                 (email, org_code),
             )
             columns = [col.name for col in cur.description]

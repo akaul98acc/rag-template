@@ -38,7 +38,6 @@ export default function Login() {
     if (!form.email.trim()) errors.email = "Email is required";
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email))
       errors.email = "Enter a valid email address";
-    if (!form.orgCode.trim()) errors.orgCode = "Organisation code is required";
     setStep1Errors(errors);
     return Object.keys(errors).length === 0;
   }

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import psycopg2
 import psycopg2.errors
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from app.models.organization import (
@@ -11,7 +11,7 @@ from app.models.organization import (
     OrganizationResponse,
     OrganizationUpdate,
 )
-from app.api.deps import get_or_404
+from app.api.deps import get_or_404, require_super_admin
 from app.services.database import (
     db_check_org_code,
     db_create_organization,
@@ -30,6 +30,7 @@ async def list_organizations(
     page_size: int = Query(20, ge=1, le=100),
     search: str | None = Query(None),
     plan: str | None = Query(None),
+    _: dict = Depends(require_super_admin),
 ) -> OrganizationListResponse:
     result = await db_list_organizations(
         page=page, page_size=page_size, search=search, plan=plan
@@ -38,7 +39,10 @@ async def list_organizations(
 
 
 @router.post("/organizations", response_model=OrganizationResponse, status_code=201)
-async def create_organization(body: OrganizationCreate) -> OrganizationResponse:
+async def create_organization(
+    body: OrganizationCreate,
+    _: dict = Depends(require_super_admin),
+) -> OrganizationResponse:
     try:
         row = await db_create_organization(
             {**body.model_dump(), "created_by": "system", "updated_by": "system"}
@@ -49,7 +53,10 @@ async def create_organization(body: OrganizationCreate) -> OrganizationResponse:
 
 
 @router.get("/organizations/check-org-code")
-async def check_org_code(org_code: str = Query(..., min_length=1)) -> dict:
+async def check_org_code(
+    org_code: str = Query(..., min_length=1),
+    _: dict = Depends(require_super_admin),
+) -> dict:
     """Returns {"available": true} if the org_code is not taken, {"available": false} otherwise."""
     taken = await db_check_org_code(org_code)
     return {"available": not taken}
@@ -62,7 +69,11 @@ async def get_organization(org_id: str) -> OrganizationResponse:
 
 
 @router.put("/organizations/{org_id}", response_model=OrganizationResponse)
-async def update_organization(org_id: str, body: OrganizationUpdate) -> OrganizationResponse:
+async def update_organization(
+    org_id: str,
+    body: OrganizationUpdate,
+    _: dict = Depends(require_super_admin),
+) -> OrganizationResponse:
     row = await get_or_404(
         db_update_organization(org_id, {**body.model_dump(), "updated_by": "system"}),
         detail="Organization not found",
@@ -71,7 +82,10 @@ async def update_organization(org_id: str, body: OrganizationUpdate) -> Organiza
 
 
 @router.delete("/organizations/{org_id}", status_code=204)
-async def delete_organization(org_id: str) -> Response:
+async def delete_organization(
+    org_id: str,
+    _: dict = Depends(require_super_admin),
+) -> Response:
     deleted = await db_delete_organization(org_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Organization not found")
