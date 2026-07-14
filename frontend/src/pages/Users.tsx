@@ -16,9 +16,10 @@ import {
   updateUser,
   deleteUser,
   checkEmail,
-  listOrganizations,
   listRoles,
 } from "@/services/api";
+import { useAuth } from "@/contexts/AuthContext";
+import { buildOrgsFetcher } from "@/lib/session-utils";
 import { toast } from "@/hooks/use-toast";
 import type { User, UserCreate, UserUpdate, Organization, Role } from "@/types/api";
 
@@ -93,6 +94,7 @@ interface UserPanelProps {
   mode: Mode;
   selected: User | null;
   saving: boolean;
+  orgsFetcher: () => Promise<Organization[]>;
   onClose: () => void;
   onSave: (form: FormState, reportError: ReportError) => void;
   onEdit: () => void;
@@ -104,6 +106,7 @@ function UserPanel({
   mode,
   selected,
   saving,
+  orgsFetcher,
   onClose,
   onSave,
   onEdit,
@@ -123,15 +126,38 @@ function UserPanel({
     setErrors({});
   }, [mode, selected]);
 
-  // Fetch organizations and roles once when panel opens (for dropdowns)
   useEffect(() => {
-    listOrganizations({ page_size: 100 })
-      .then((res) => setOrgs(res.items))
-      .catch(() => {});
+    orgsFetcher().then((items) => {
+      setOrgs(items);
+      // Preselect when there is exactly one org and no org is chosen yet
+      if (items.length === 1 && items[0]) {
+        setForm((prev) => prev.org_id ? prev : { ...prev, org_id: items[0]!.org_id });
+      }
+    }).catch(() => {});
     listRoles({ page_size: 100 })
-      .then((res) => setRoles(res.items))
+      .then((res) => setRoles(res.items.filter((r) => r.name !== "Super Admin")))
       .catch(() => {});
-  }, []);
+  }, [orgsFetcher]);
+
+  const selectedRoleName = roles.find((r) => r.id === form.role_id)?.name ?? "";
+  const isSelectedSuperAdmin = selectedRoleName === "Super Admin";
+
+  function handleRoleChange(roleId: string) {
+    const roleName = roles.find((r) => r.id === roleId)?.name ?? "";
+    const isSuperAdminRole = roleName === "Super Admin";
+    setForm((prev) => ({
+      ...prev,
+      role_id: roleId,
+      // Clear org when switching to Super Admin
+      org_id: isSuperAdminRole ? "" : prev.org_id,
+    }));
+    setErrors((prev) => {
+      const n = { ...prev };
+      delete n.role_id;
+      if (isSuperAdminRole) delete n.org_id;
+      return n;
+    });
+  }
 
   async function handleEmailBlur() {
     if (mode !== "create" || !form.email.trim() || !isValidEmail(form.email)) return;
@@ -164,7 +190,7 @@ function UserPanel({
     if (mode === "create") {
       if (!form.email.trim()) next.email = "Required";
       else if (!isValidEmail(form.email)) next.email = "Enter a valid email address";
-      if (!form.org_id) next.org_id = "Required";
+      if (!isSelectedSuperAdmin && !form.org_id) next.org_id = "Required";
     }
     if (!form.role_id) next.role_id = "Required";
     if (!next.email && errors.email) next.email = errors.email;
@@ -239,40 +265,13 @@ function UserPanel({
         )}
       </FieldGroup>
 
-      <FieldGroup label="Organization" error={errors.org_id}>
-        {isReadOnly || mode === "edit" ? (
-          <p className="text-sm text-fg py-1">{selected?.org_name ?? "—"}</p>
-        ) : (
-          <select
-            value={form.org_id}
-            onChange={(e) => {
-              setForm({ ...form, org_id: e.target.value });
-              setErrors((prev) => { const n = { ...prev }; delete n.org_id; return n; });
-            }}
-            className="flex h-9 w-full rounded-md border border-border-strong bg-surface px-3 py-1 text-sm text-fg shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
-          >
-            <option value="">
-              {orgs.length === 0 ? "No organizations available" : "Select organization…"}
-            </option>
-            {orgs.map((org) => (
-              <option key={org.org_id} value={org.org_id}>
-                {org.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </FieldGroup>
-
       <FieldGroup label="Role" error={errors.role_id}>
         {isReadOnly ? (
           <p className="text-sm text-fg py-1">{selected?.role_name ?? "—"}</p>
         ) : (
           <select
             value={form.role_id}
-            onChange={(e) => {
-              setForm({ ...form, role_id: e.target.value });
-              setErrors((prev) => { const n = { ...prev }; delete n.role_id; return n; });
-            }}
+            onChange={(e) => handleRoleChange(e.target.value)}
             className="flex h-9 w-full rounded-md border border-border-strong bg-surface px-3 py-1 text-sm text-fg shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
           >
             <option value="">
@@ -286,6 +285,33 @@ function UserPanel({
           </select>
         )}
       </FieldGroup>
+
+      {/* Organization — hidden for Super Admin role; immutable on edit */}
+      {!isSelectedSuperAdmin && (
+        <FieldGroup label="Organization" error={errors.org_id}>
+          {isReadOnly || mode === "edit" ? (
+            <p className="text-sm text-fg py-1">{selected?.org_name ?? "—"}</p>
+          ) : (
+            <select
+              value={form.org_id}
+              onChange={(e) => {
+                setForm({ ...form, org_id: e.target.value });
+                setErrors((prev) => { const n = { ...prev }; delete n.org_id; return n; });
+              }}
+              className="flex h-9 w-full rounded-md border border-border-strong bg-surface px-3 py-1 text-sm text-fg shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring-strong"
+            >
+              <option value="">
+                {orgs.length === 0 ? "No organizations available" : "Select organization…"}
+              </option>
+              {orgs.map((org) => (
+                <option key={org.org_id} value={org.org_id}>
+                  {org.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </FieldGroup>
+      )}
 
       <FieldGroup label="Phone Number">
         {isReadOnly ? (
@@ -323,11 +349,14 @@ function UserPanel({
 // ---------------------------------------------------------------------------
 
 export default function Users() {
+  const { claims } = useAuth();
   const [selected, setSelected] = useState<User | null>(null);
   const [mode, setMode] = useState<Mode>("view");
   const [panelOpen, setPanelOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+
+  const orgsFetcher = buildOrgsFetcher(claims);
 
   const { items: users, total, page, setPage, search, setSearch, loading, refresh } =
     useEntityList<User>({
@@ -338,6 +367,7 @@ export default function Users() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   function openCreate() {
+    setSearch("");
     setSelected(null);
     setMode("create");
     setPanelOpen(true);
@@ -363,8 +393,8 @@ export default function Users() {
         const payload: UserCreate = {
           name: form.name,
           email: form.email,
-          org_id: form.org_id,
           role_id: form.role_id,
+          ...(form.org_id ? { org_id: form.org_id } : {}),
           ...(form.phone_number ? { phone_number: form.phone_number } : {}),
         };
         await createUser(payload);
@@ -379,6 +409,7 @@ export default function Users() {
         toast({ title: "User updated." });
       }
       setPanelOpen(false);
+      setSearch("");
       refresh();
     } catch (err: unknown) {
       if (hasStatus(err, 409)) {
@@ -469,6 +500,7 @@ export default function Users() {
           mode={mode}
           selected={selected}
           saving={saving}
+          orgsFetcher={orgsFetcher}
           onClose={closePanel}
           onSave={handleSave}
           onEdit={() => setMode("edit")}

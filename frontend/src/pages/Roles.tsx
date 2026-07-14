@@ -27,6 +27,7 @@ import type { Role, RoleCreate, RoleUpdate } from "@/types/api";
 const PAGE_SIZE = 20;
 
 const SEEDED_NAMES = new Set(["Admin", "Manager", "User", "Viewer"]);
+const HIDDEN_NAMES = new Set(["Super Admin"]);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -252,12 +253,14 @@ export default function Roles() {
   const [deleteTarget, setDeleteTarget] = useState<Role | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const { items: roles, total, page, setPage, search, setSearch, loading, refresh } =
+  const { items: rawRoles, total: rawTotal, page, setPage, search, setSearch, loading, refresh } =
     useEntityList<Role>({
       fetcher: (params) => listRoles(params),
       pageSize: PAGE_SIZE,
     });
 
+  const roles = rawRoles.filter((r) => !HIDDEN_NAMES.has(r.name));
+  const total = rawTotal - (rawRoles.length - roles.length);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   function openCreate() {

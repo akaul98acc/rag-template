@@ -9,7 +9,7 @@ class UserCreate(BaseModel):
     name: str
     email: str
     phone_number: str | None = None
-    org_id: str
+    org_id: str | None = None
     role_id: str
 
 
